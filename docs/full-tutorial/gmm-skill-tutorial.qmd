@@ -1,0 +1,1398 @@
+---
+title: "多變量 Gaussian Mixture Model 與 GMM Skill"
+subtitle: "從統計理論、Hair 六階段流程到可重現的 Claude Code Skill"
+lang: zh-TW
+bibliography: references.bib
+link-citations: true
+format:
+  html:
+    toc: true
+    toc-title: "目錄"
+    toc-depth: 3
+    toc-location: left
+    number-sections: true
+    number-depth: 3
+    embed-resources: true
+    html-math-method: mathml
+    theme: cosmo
+    css: tutorial.css
+    code-fold: true
+    code-summary: "顯示程式碼"
+    fig-align: center
+    fig-width: 8
+    fig-height: 4.6
+    smooth-scroll: true
+execute:
+  echo: false
+  warning: false
+  message: false
+crossref:
+  eq-prefix: "式"
+  fig-prefix: "圖"
+  tbl-prefix: "表"
+  sec-prefix: "§"
+---
+
+```{r}
+#| label: setup
+source('R/tutorial_helpers.R', encoding = 'UTF-8')
+SK <- new.env(); sys.source(file.path(SKILL, 'scripts/em_stage4.R'), envir = SK, chdir = TRUE)
+ev <- evidence_check()
+pcmp <- rd(P_('stage4/selection-G1-5/model_comparison.csv'))
+pcs <- rd(P_('stage5/interpretation-G3/component_summary.csv')); pcm <- rd(P_('stage5/interpretation-G3/component_means.csv'))
+pev <- rj(P_('stage6/validation-G3-vs-G4-with-replay/external_validation.json'))
+pst <- rd(P_('stage6/validation-G3-vs-G4-with-replay/stability_summary.csv')); pse <- rd(P_('stage6/validation-G3-vs-G4-with-replay/model_sensitivity.csv'))
+punc <- rj(P_('stage5/interpretation-G3/uncertainty_summary.json')); ps5 <- rj(P_('stage5/interpretation-G3/stage5_summary.json'))
+aw <- rd(A_('workflow/stage4-selection/model_comparison.csv')); as4 <- rd(A_('stage4-sensitivity/model_comparison.csv'))
+acf <- rd(A_('stage4-confirmation-tol1e-8/confirmation_by_G.csv')); amc <- rd(A_('stage4-mclust-comparison/em_vs_mclust.csv'))
+acs <- rd(A_('stage5-interpretation-G5/component_summary.csv')); acm <- rd(A_('stage5-interpretation-G5/component_means.csv'))
+ast <- rd(A_('stage6-validation-G5-vs-G4-with-replay/stability_summary.csv')); ase <- rd(A_('stage6-validation-G5-vs-G4-with-replay/model_sensitivity.csv'))
+f9 <- rd(EV('data/f9a_auto_summary.csv'))
+dlog <- rd('demo/demo_log.csv'); dinfo <- rj('demo/demo_info.json')
+hz <- readLines(file.path(SKILL, 'references/pending-heuristics.md'), encoding = 'UTF-8'); n_hz <- sum(grepl('^\\| [0-9]+ \\|', hz))
+reg <- readLines('evidence/test-run/full_regression_summary.txt', encoding = 'UTF-8', warn = FALSE)
+n_tests <- as.integer(sub('ok-lines: ', '', grep('^ok-lines', reg, value = TRUE)))
+pfig <- function(n) P_('final-report-registry/figures', n); afig <- function(n) A_('final-report-registry-approved-notes/figures', n)
+g <- function(d, G, col) d[[col]][d$G == G]
+```
+
+::: {.callout-warning}
+## 文件狀態：初版，尚未學術定稿
+功能驗收已完成，學術內容審查的修訂已納入，但仍有待核對項目（@sec-pending）。修訂紀錄見 `tutorial/REVISION_LOG.md`。
+:::
+
+# Part I — 專題動機與概覽 {.unnumbered}
+
+# 這份教材要解決什麼問題
+
+統計軟體可以很快算出一個 Gaussian Mixture Model (GMM)，但分析者真正需要回答的問題往往不是「程式跑完了沒」：
+
+- 資料適合用 GMM 嗎？缺失值該怎麼處理，由誰決定？
+- EM 收斂了，代表找到最好的解嗎？
+- BIC 選出 $G=5$，而 5 正好是搜尋上界，這個結論有多可靠？
+- 模型分出的成分，是真實存在的群體嗎？
+
+本專案把這些判斷做成一個 **Claude Code Skill**（`multivariate-gmm`）。它參考 @hair2018 第 4 章的六階段分群架構（pp. 199–229），並針對 GMM 加以延伸。各階段的內容不完全等同於原書，差異見 @sec-sources。它用 base R 實作 full-covariance GMM 的 EM，並要求每一個會改變分析的決定都經過使用者確認。
+
+::: {.callout-important}
+## 三個貫穿全文的原則
+1. **數字只來自程式**：Claude 不估計、不心算；本文的案例表格與主要結果也是渲染時從保存的檔案讀取。
+2. **改變分析的決定屬於使用者**：刪列、插補、標準化、切換模型都要明確核准。
+3. **不宣稱沒做到的事**：Gaussian 成分不一定是自然群組，posterior 不等於分類準確率，收斂不等於全域最佳。
+:::
+
+## 三種讀法
+
+| 讀者 | 建議路徑 |
+|---|---|
+| 課堂展示 | @sec-part1-map → 各理論章的圖 → @sec-decision → @sec-penguins、@sec-auto |
+| 統計理論學習 | Part II 全部，並展開「推導」區塊 |
+| 想使用或開發 Skill | Part III 全部 → @sec-demo → @sec-mapping |
+
+## 全文地圖 {#sec-part1-map}
+
+```{mermaid}
+flowchart LR
+  A["Part I<br/>動機與概覽"] --> B["Part II<br/>多變量統計知識"]
+  B --> C["Part III<br/>Skill 設計與實作"]
+  C --> D["Part IV<br/>真實資料與示範"]
+  D --> E["Part V<br/>限制與來源"]
+```
+
+## 如何判讀本文的結果：證據層級 {#sec-tiers}
+
+本文引用的結果不屬於同一種地位。每一份結果都會標示下列層級，並列出來源路徑、設定與適用範圍。
+
+```{r}
+#| output: asis
+for (k in names(TIERS)) cat(sprintf('<span class="src-box tier-%s" style="display:inline-block;padding:.15rem .5rem;margin:.15rem .25rem;border-left:0"><span class="tier-tag" style="margin:0">%s</span></span>', k, TIERS[[k]]))
+```
+
+| 層級 | 意義 | 可否當作分析結論 |
+|---|---|---|
+| 已核准正式結果 | 使用者逐階段核准的結果 | 可以，但仍受其限制 |
+| 已核准工作模型 | 使用者核准作為後續解釋的敏感度模型，**不取代**正式 Stage 4 模型 | 僅在其核准範圍內 |
+| 診斷資料 | 收斂確認、KNN 稽核等，只提供檢查資訊 | 不能單獨改變模型 |
+| mclust 驗證對照 | 用獨立實作比較數值，mclust 不參與正式估計 | 不能 |
+| 未採用的暫存區試算 | F9 初始化試算，未核准、未登記為 Candidate | 不能 |
+| 教學示範 | example data 上的模擬核准 | 不能 |
+| 教學模擬 | 本文為解說而模擬的小資料 | 不能 |
+
+# Part II — Multivariate Statistical Knowledge {.unnumbered}
+
+本部分的符號與 Skill 一致：$n$ 為列數，$p$ 為變數數，$G$ 為成分數，$x_j\in\mathbb{R}^p$ 為第 $j$ 列，$\pi_i,\mu_i,\Sigma_i$ 為第 $i$ 個成分的混合比例、平均與共變異數。每一節最後列出對應的 R 函式；完整對照見 @sec-mapping。
+
+# Multivariate Normal Distribution
+
+## 密度函數
+
+若 $X\sim N_p(\mu,\Sigma)$，其中 $\Sigma$ 為對稱正定矩陣，則
+
+$$
+\phi_p(x;\mu,\Sigma)=(2\pi)^{-p/2}|\Sigma|^{-1/2}\exp\!\left\{-\tfrac12 (x-\mu)^\top\Sigma^{-1}(x-\mu)\right\}.
+$$ {#eq-mvn}
+
+取對數後，
+
+$$
+\log\phi_p(x;\mu,\Sigma)=-\tfrac p2\log(2\pi)-\tfrac12\log|\Sigma|-\tfrac12 (x-\mu)^\top\Sigma^{-1}(x-\mu).
+$$ {#eq-logmvn}
+
+幾個在 GMM 中會直接用到的性質：
+
+- **Affine 變換**：若 $Y=AX+b$ 且 $A$ 可逆，則 $Y\sim N_p(A\mu+b,\,A\Sigma A^\top)$。
+- **邊際與條件分布**：將 $X$ 分塊為 $(X_1,X_2)$，則 $X_1\sim N(\mu_1,\Sigma_{11})$，且
+
+$$
+X_1\mid X_2=x_2\sim N\!\left(\mu_1+\Sigma_{12}\Sigma_{22}^{-1}(x_2-\mu_2),\ \Sigma_{11}-\Sigma_{12}\Sigma_{22}^{-1}\Sigma_{21}\right).
+$$ {#eq-conditional}
+
+  條件平均是 $x_2$ 的線性函數，這正是以其他變數填補缺失值的理論來源；但 Skill 的 KNN 並不使用這個公式（@sec-missing）。
+
+## Mahalanobis distance
+
+$$
+D^2(x)=(x-\mu)^\top\Sigma^{-1}(x-\mu).
+$$ {#eq-mahalanobis}
+
+$D^2$ 同時考慮變異數與相關性。令 $\Sigma=V\Lambda V^\top$，則 $D^2=\sum_{k}\big(v_k^\top(x-\mu)\big)^2/\lambda_k$，因此等高線 $D^2=c$ 是以特徵向量為軸、半軸長 $\sqrt{c\lambda_k}$ 的橢球。若 $X\sim N_p(\mu,\Sigma)$ 且 $\mu,\Sigma$ 為**已知**，則 $D^2\sim\chi^2_p$。以樣本平均與樣本共變異代入時，這只是 $n$ 遠大於 $p$ 時的近似。
+
+```{r}
+#| label: fig-mahalanobis
+#| fig-cap: "相關性為 0.85 時，兩點與中心的歐氏距離相同，但 Mahalanobis distance 差距很大。（教學模擬）"
+#| fig-width: 5.4
+#| fig-height: 5
+#| echo: true
+fig_mahalanobis()
+```
+
+::: {.callout-note}
+## Skill 中的對應
+`em_logdens()` 計算 @eq-logmvn。Stage 3 的 S3-07 以**樣本**相關矩陣計算全體資料的 $D^2$，再與 $\chi^2_{p,0.999}$ 比較，所以卡方門檻只是近似。它也只是 screening：資料若來自混合分布，全體 $D^2$ 本來就不服從 $\chi^2_p$，因此不會自動刪列。
+:::
+
+# Covariance Matrix、正定性與數值條件
+
+## 共變異數矩陣
+
+$\Sigma=\mathrm{E}[(X-\mu)(X-\mu)^\top]$ 必為對稱半正定。要讓 @eq-mvn 存在，需要 $\Sigma$ **正定**，也就是對所有非零 $a$，$a^\top\Sigma a>0$，等價於所有特徵值 $\lambda_k>0$。
+
+| 概念 | 定義 | 在 GMM 中的意義 |
+|---|---|---|
+| 特徵值 | $\Sigma v_k=\lambda_k v_k$ | 主軸方向的變異量；$\lambda_{\min}\to0$ 代表分布壓扁 |
+| 行列式 | $\lvert\Sigma\rvert=\prod_k\lambda_k$ | 橢球體積；趨近 0 時密度可以無限大 |
+| 條件數 | $\kappa(\Sigma)=\lambda_{\max}/\lambda_{\min}$ | 不同方向上的相對尺度差異；反映相對接近奇異的程度，不反映等比例縮小 |
+| Cholesky | $\Sigma=R^\top R$，$R$ 上三角 | 精確運算下，對稱矩陣有此分解若且唯若正定；實際計算見下節 |
+
+## 穩定的數值計算
+
+若 $\Sigma_i=R_i^\top R_i$，則
+
+$$
+\log|\Sigma_i|=2\sum_{k}\log R_{i,kk},\qquad (x-\mu_i)^\top\Sigma_i^{-1}(x-\mu_i)=\big\|R_i^{-\top}(x-\mu_i)\big\|^2 .
+$$ {#eq-chol}
+
+只需解三角系統，不必求反矩陣。在精確運算下，正定矩陣必有 Cholesky decomposition；但在有限精度計算中，分解成功或失敗仍可能受浮點誤差、矩陣尺度及數值條件影響，所以「`chol()` 成功」與「矩陣在數學上正定」不完全等價。各列的 log-likelihood 再用 log-sum-exp 避免 underflow：
+
+$$
+a_{ji}=\log\pi_i+\log\phi_p(x_j;\mu_i,\Sigma_i),\quad m_j=\max_i a_{ji},\quad \ell_j=m_j+\log\sum_i \exp(a_{ji}-m_j).
+$$ {#eq-logsumexp}
+
+::: {.callout-tip collapse="true" title="Skill 實際程式：em_logdens 與 em_estep"}
+```{r}
+#| output: asis
+skill_code('scripts/em_stage4.R', 'em_logdens <- function', 7); skill_code('scripts/em_stage4.R', 'em_estep <- function', 13)
+```
+:::
+
+## 共線性與尺度
+
+**完全共線**時 rank 小於 $p$，任何成分的 $\Sigma_i$ 都是奇異的，full-covariance 密度沒有定義，因此 Stage 3 的 S3-03、S3-04 是 STOP。**近似共線**則只造成數值不穩，不是刪變數的理由，Stage 3 以 condition index、VIF、$|r|$ 給 WARNING（門檻為待審 heuristic，見 @sec-limits）。
+
+$$
+\mathrm{VIF}_k=\frac{1}{1-\rho_k^2},\qquad \text{condition index}=\sqrt{\lambda_{\max}(C)/\lambda_{\min}(C)}.
+$$ {#eq-vif}
+
+其中 $C$ 為相關矩陣，$\rho_k^2$ 是第 $k$ 個變數對其他變數迴歸的決定係數。程式以 `diag(solve(C))` 計算 VIF。
+
+**尺度不變性。** 令 $z=A x+b$，$A$ 可逆。密度變換為 $f_Z(z)=f_X(x)/|\det A|$。Full-covariance GMM 的參數空間在可逆 affine 變換下封閉：$(\pi_i,\mu_i,\Sigma_i)$ 對應到 $(\pi_i,\,A\mu_i+b,\,A\Sigma_iA^\top)$。在對應的參數下，log-likelihood 僅相差一個與參數無關的常數，posterior responsibilities 保持不變；非退化的局部極值，以及適當條件下的駐點，也彼此對應：
+
+$$
+\ell_z(\hat\theta_z)=\ell_x(\hat\theta_x)-n\log|\det A|\ \Longrightarrow\ \ell_x=\ell_z-n\sum_{k=1}^p\log s_k\quad(\text{z-score 時 }A=\mathrm{diag}(1/s_k)).
+$$ {#eq-invariance}
+
+式中 $\hat\theta_x,\hat\theta_z$ 指任一組如此對應的參數。這**不表示**全域最大概似解存在：$G\ge2$ 的未受約束 GMM，likelihood 一般無上界（@sec-unbounded）。
+
+```{r}
+tp <- rd(P_('stage3/approved/transform_params.csv')); sdcol <- intersect(c('sd', 'scale', 'SD'), names(tp))[1]
+lhs <- ps5$checks$loglik_original_scale; rhs <- ps5$checks$loglik_fitted_scale - 342 * sum(log(tp[[sdcol]]))
+```
+
+Penguins 的已核准結果可以驗證這一點：z-score 尺度的 $\ell=$ `r fx(ps5$checks$loglik_fitted_scale,3)`，原始單位 $\ell=$ `r fx(lhs,3)`；由 @eq-invariance 計算得 `r fx(rhs,3)`。在**精確數學模型**下（把 z-score 的平均與標準差視為固定常數，且不考慮 guard），尺度不改變模型。但數學上的不變性，不等於距離型初始化及數值 guard 的實際執行結果不變：$\kappa\le10^{10}$ 的 guard 不是尺度不變量，k-means 與 Ward 的距離也依賴尺度，所以不同尺度可能得到不同的起點路徑或觸發不同的 guard。z-score 的好處是改善條件數（Penguins 由 $2.75\times10^5$ 降至 $25.4$，見 Stage 3 S3-09）並讓 k-means 初始化不受單位影響。
+
+::: {.callout-note}
+## Skill 中的對應
+`em_check()` 執行 Cholesky 與條件數檢查；`em_cov_conditions()`、`em_cov_min_eigen()` 回報條件數與最小特徵值；`feasibility_stage3.R` 執行 S3-03 至 S3-09。
+:::
+
+# Finite Gaussian Mixture Model
+
+## 定義
+
+令潛在變數 $Z_j\in\{1,\dots,G\}$，$P(Z_j=i)=\pi_i$，且 $X_j\mid Z_j=i\sim N_p(\mu_i,\Sigma_i)$。積分掉 $Z_j$ 得到
+
+$$
+f(x;\theta)=\sum_{i=1}^{G}\pi_i\,\phi_p(x;\mu_i,\Sigma_i),\qquad \pi_i>0,\ \sum_i\pi_i=1.
+$$ {#eq-mixture}
+
+```{r}
+#| label: fig-mixture
+#| fig-cap: "左：兩個加權成分相加成為混合密度。右：posterior responsibility 隨 x 平滑變化。（教學模擬）"
+#| fig-height: 3.8
+#| echo: true
+fig_mixture()
+```
+
+## 模型假設
+
+| 假設 | 內容 | Skill 如何處理 |
+|---|---|---|
+| 觀測獨立 | 概似是各列密度的乘積 | **無法由資料證明**；S3-14 要求使用者確認或記為 working assumption |
+| 成分為 Gaussian | 只要求**每個成分**常態，不要求全體常態 | S3-10 不做全體常態檢定；偏態可能被多餘成分吸收 |
+| 共變異結構 | Skill v1 固定為 component-specific full covariance（mclust 的 VVV） | S3-12；其他結構**未實作** |
+| $G$ 有限且已知 | 在候選集合內比較 | Stage 3 核准候選，預設 1 到 5 只是起點 |
+| 資料完整且連續 | 概似以完整連續向量定義 | Stage 2 處理缺失；Inf 為 BLOCKED |
+
+## 參數個數
+
+$(G-1)$ 個自由的混合比例、$Gp$ 個平均、每個對稱矩陣 $p(p+1)/2$ 個元素，因此
+
+$$
+k_G=(G-1)+Gp+\frac{G\,p(p+1)}{2}.
+$$ {#eq-kg}
+
+$p=4$ 時每增加一個成分就多 15 個參數，$G=5$ 時 $k_G=74$。參數個數本身不保證可估計：Stage 3 將 $k_G\ge n$ 或 $n/G<p+1$ 視為 STOP，$n/G<5\,(p+p(p+1)/2)$ 只給 WARNING（待審 heuristic）。
+
+## Label switching
+
+對任一排列 $\sigma$，把成分編號換成 $\sigma(1),\dots,\sigma(G)$ 不改變 @eq-mixture，所以同一個解有 $G!$ 個等價表示。這造成兩個實務問題：不同起點的同一個成分可能編號不同；比較參數前必須先對齊。
+
+::: {.callout-note}
+## Skill 中的對應
+`em_reorder()` 把報告順序固定為混合比例遞減；`s4_align()` 在跨起點比較時搜尋使平均向量距離最小的排列；ARI、NMI 本身不受編號影響（@sec-validation）。
+:::
+
+# Likelihood：觀測資料與完整資料
+
+**Observed-data log-likelihood**：
+
+$$
+\ell(\theta)=\sum_{j=1}^n\log\sum_{i=1}^G\pi_i\,\phi_p(x_j;\mu_i,\Sigma_i).
+$$ {#eq-observed}
+
+對數裡有加總，所以沒有封閉解。若知道成分指標 $z_{ji}=\mathbb{1}(Z_j=i)$，**complete-data log-likelihood** 為
+
+$$
+\ell_c(\theta)=\sum_{j=1}^n\sum_{i=1}^G z_{ji}\left\{\log\pi_i+\log\phi_p(x_j;\mu_i,\Sigma_i)\right\}.
+$$ {#eq-complete}
+
+此時每個成分各自是一個 Gaussian MLE，可以直接求解。EM 的想法就是用 @eq-complete 的條件期望代替未知的 $z_{ji}$。
+
+## Likelihood 無上界 {#sec-unbounded}
+
+當 $G\ge2$ 時，$\ell(\theta)$ 沒有全域最大值。令 $\mu_1=x_1$、$\Sigma_1=\sigma^2 I$，並固定 $\pi_1,\pi_2>0$ 與正定的 $\Sigma_2$。第一列至少貢獻 $\pi_1(2\pi\sigma^2)^{-p/2}$；其他列至少貢獻 $\pi_2\phi_p(x_j;\mu_2,\Sigma_2)>0$，這個下界與 $\sigma$ 無關。因此
+
+$$
+\ell(\theta)\ \ge\ \log\!\big[\pi_1(2\pi\sigma^2)^{-p/2}\big]+\sum_{j\ne1}\log\!\big[\pi_2\,\phi_p(x_j;\mu_2,\Sigma_2)\big]\xrightarrow[\sigma\to0]{}\infty .
+$$ {#eq-unbounded}
+
+關鍵是其他列的貢獻有**正的下界**，而不只是有上界。$G=1$ 且樣本共變異正定時不會發生這種情形。這稱為 **covariance collapse**。因此未受約束 GMM 的 likelihood 可能無上界，一般不存在全域最大概似解。實務上通常搜尋非退化的局部最適解或數值上可接受的擬合解。EM 不保證全域最佳；通過停止規則的結果也不應直接稱為已證明的局部最大概似解，`CONVERGED_VALID` 不等於已證明達到局部最大值（見 §6.6）。**likelihood 較高不代表模型較好**。
+
+```{r}
+#| label: fig-collapse
+#| fig-cap: "讓一個成分停在單一資料點並縮小變異，log-likelihood 持續上升。（教學模擬）"
+#| fig-width: 6
+#| fig-height: 3.8
+#| echo: true
+fig_collapse(SK)
+```
+
+# EM Algorithm
+
+EM 的一般架構來自 @dempster1977。本章的推導專指 Skill 使用的 full-covariance Gaussian mixture。
+
+## 為什麼 EM 可行：下界分解
+
+對任意分布 $q_j(i)$，由 Jensen 不等式，
+
+$$
+\log f(x_j;\theta)=\log\sum_i q_j(i)\frac{\pi_i\phi_{ji}}{q_j(i)}\ \ge\ \sum_i q_j(i)\log\frac{\pi_i\phi_{ji}}{q_j(i)},
+$$ {#eq-jensen}
+
+其中 $\phi_{ji}=\phi_p(x_j;\mu_i,\Sigma_i)$。更精確地，
+
+$$
+\ell(\theta)=\underbrace{\sum_{j,i} q_j(i)\log\frac{\pi_i\phi_{ji}}{q_j(i)}}_{\mathcal{L}(q,\theta)}+\underbrace{\sum_j \mathrm{KL}\big(q_j\,\|\,p(Z_j\mid x_j;\theta)\big)}_{\ge0}.
+$$ {#eq-elbo}
+
+取 $q_j$ 等於後驗時 KL 為 0，下界碰到 $\ell(\theta)$。這就是 E-step。
+
+## E-step 與 Q-function
+
+在 $\theta^{(t)}$ 下由 Bayes 定理，
+
+$$
+\tau_{ji}^{(t)}=P(Z_j=i\mid x_j;\theta^{(t)})=\frac{\pi_i^{(t)}\phi_p(x_j;\mu_i^{(t)},\Sigma_i^{(t)})}{\sum_{h}\pi_h^{(t)}\phi_p(x_j;\mu_h^{(t)},\Sigma_h^{(t)})}=\exp(a_{ji}-\ell_j).
+$$ {#eq-estep}
+
+$\ell_c$ 對 $z_{ji}$ 是線性的，所以條件期望只需把 $z_{ji}$ 換成 $\tau_{ji}$：
+
+$$
+Q(\theta\mid\theta^{(t)})=\sum_{j=1}^n\sum_{i=1}^G\tau_{ji}^{(t)}\left\{\log\pi_i+\log\phi_p(x_j;\mu_i,\Sigma_i)\right\}.
+$$ {#eq-q}
+
+**Q 與下界的關係。** 取 $q_j=\tau_j^{(t)}$ 代入 @eq-elbo 的下界，得到
+
+$$
+\mathcal{L}(\tau^{(t)},\theta)=Q(\theta\mid\theta^{(t)})-\sum_{j,i}\tau_{ji}^{(t)}\log\tau_{ji}^{(t)} .
+$$ {#eq-qbound}
+
+最後一項不含 $\theta$，所以最大化 $Q$ 就是最大化下界。
+
+## M-step
+
+假設每個成分 $N_i=\sum_j\tau_{ji}>0$，且加權散佈矩陣正定。最大化 @eq-q 得到封閉解：
+
+$$
+\pi_i^{\text{new}}=\frac{N_i}{n},\qquad
+\mu_i^{\text{new}}=\frac{1}{N_i}\sum_j\tau_{ji}x_j,\qquad
+\Sigma_i^{\text{new}}=\frac{1}{N_i}\sum_j\tau_{ji}(x_j-\mu_i^{\text{new}})(x_j-\mu_i^{\text{new}})^\top.
+$$ {#eq-mstep}
+
+::: {.callout-note collapse="true" title="推導：π、μ、Σ 的更新式"}
+**$\pi$。** 以 Lagrange 乘數處理 $\sum_i\pi_i=1$：
+
+$$
+\frac{\partial}{\partial\pi_i}\Big[\sum_{j,i}\tau_{ji}\log\pi_i+\lambda\big(1-\sum_i\pi_i\big)\Big]=\frac{N_i}{\pi_i}-\lambda=0 .
+$$
+
+對 $i$ 加總得 $\lambda=\sum_i N_i=n$，所以 $\pi_i=N_i/n$。
+
+**$\mu_i$。** $Q$ 中與 $\mu_i$ 有關的項是 $-\tfrac12\sum_j\tau_{ji}(x_j-\mu_i)^\top\Sigma_i^{-1}(x_j-\mu_i)$，微分得
+
+$$
+\frac{\partial Q}{\partial\mu_i}=\sum_j\tau_{ji}\Sigma_i^{-1}(x_j-\mu_i)=0\ \Longrightarrow\ \mu_i=\frac{\sum_j\tau_{ji}x_j}{N_i}.
+$$
+
+**$\Sigma_i$。** 令 $\Omega_i=\Sigma_i^{-1}$，並用 $y^\top\Omega y=\mathrm{tr}(\Omega yy^\top)$。與 $\Omega_i$ 有關的項是
+
+$$
+\tfrac12 N_i\log|\Omega_i|-\tfrac12\mathrm{tr}\Big(\Omega_i\sum_j\tau_{ji}(x_j-\mu_i)(x_j-\mu_i)^\top\Big).
+$$
+
+由 $\partial\log|\Omega|/\partial\Omega=\Omega^{-1}$、$\partial\,\mathrm{tr}(\Omega A)/\partial\Omega=A$，得
+
+$$
+\tfrac12 N_i\Omega_i^{-1}-\tfrac12\sum_j\tau_{ji}(x_j-\mu_i)(x_j-\mu_i)^\top=0,
+$$
+
+也就是 @eq-mstep。此處把 $\Omega_i$ 當成一般矩陣微分；限制在對稱矩陣上會得到同一個駐點。分母是 $N_i$（MLE），不是 $N_i-1$；$\mu_i$ 要用**更新後**的值。$\pi$ 的目標在 simplex 上是凹函數。
+
+**為什麼 $(\mu_i,\Omega_i)$ 的駐點是最大值：profile Q-function。** 令 $\bar x_i=N_i^{-1}\sum_j\tau_{ji}x_j$，$W_i=\sum_j\tau_{ji}(x_j-\bar x_i)(x_j-\bar x_i)^\top$。因為
+
+$$
+\sum_j\tau_{ji}(x_j-\mu_i)(x_j-\mu_i)^\top=W_i+N_i(\mu_i-\bar x_i)(\mu_i-\bar x_i)^\top,
+$$
+
+$Q$ 中與 $(\mu_i,\Omega_i)$ 有關的部分是
+
+$$
+q_i(\mu_i,\Omega_i)=\tfrac12 N_i\log|\Omega_i|-\tfrac12\mathrm{tr}(\Omega_i W_i)-\tfrac12 N_i(\mu_i-\bar x_i)^\top\Omega_i(\mu_i-\bar x_i).
+$$
+
+先固定任一正定的 $\Omega_i$。當 $N_i>0$ 時，最後一項只在 $\mu_i=\bar x_i$ 時為 0，其餘情況嚴格為負，所以最佳的 $\mu_i$ 是加權平均，而且與 $\Omega_i$ 無關。代回得到 profile Q-function：
+
+$$
+q_i^{\mathrm{p}}(\Omega_i)=\tfrac12 N_i\log|\Omega_i|-\tfrac12\mathrm{tr}(\Omega_i W_i).
+$$
+
+在正定矩陣上 $\log|\Omega_i|$ 嚴格凹、trace 為線性，所以 $N_i>0$ 時 $q_i^{\mathrm{p}}$ 對正定的 $\Omega_i$ 嚴格凹。當 $W_i$ 正定時，它有唯一的駐點 $\Omega_i=N_iW_i^{-1}$，也就是 $\Sigma_i=W_i/N_i$，這就是唯一的最大值。$W_i$ 奇異時 $q_i^{\mathrm{p}}$ 沒有最大值。
+
+這個兩步論證**不需要、也不宣稱** $q_i$ 對 $(\mu_i,\Omega_i)$ 聯合凹；上式的二次項同時含 $\mu_i$ 與 $\Omega_i$，一般不是聯合凹。
+:::
+
+$G=1$ 時有封閉解 $\hat\mu=\bar x$、$\hat\Sigma=n^{-1}\sum_j(x_j-\bar x)(x_j-\bar x)^\top$，Skill 直接計算，不跑 EM。
+
+::: {.callout-tip collapse="true" title="Skill 實際程式：em_mstep 與 em_run"}
+```{r}
+#| output: asis
+skill_code('scripts/em_stage4.R', 'em_mstep <- function', 15); skill_code('scripts/em_stage4.R', 'em_run <- function', 31)
+```
+:::
+
+```{r}
+#| label: fig-empath
+#| fig-cap: "EM 從 random-soft 初始值開始的前幾步，橢圓為 90% 等高線，顏色為 responsibility。（教學模擬：240 列、一個起點）"
+#| fig-width: 10
+#| fig-height: 3
+#| echo: true
+fig_em_path(SK)
+```
+
+## 單調性
+
+M-step 使 $\mathcal{L}(q^{(t)},\theta^{(t+1)})\ge\mathcal{L}(q^{(t)},\theta^{(t)})=\ell(\theta^{(t)})$；再由 @eq-elbo，$\ell(\theta^{(t+1)})\ge\mathcal{L}(q^{(t)},\theta^{(t+1)})$。所以在精確運算下
+
+$$
+\ell(\theta^{(t+1)})\ge\ell(\theta^{(t)}).
+$$ {#eq-monotone}
+
+**標準 EM 與 generalized EM。** 標準 EM 在 M-step 取得 $Q$ 的最大值。Generalized EM 只要求 $Q(\theta^{(t+1)}\mid\theta^{(t)})\ge Q(\theta^{(t)}\mid\theta^{(t)})$，@eq-monotone 仍然成立。Skill 的 `em_mstep` 使用 @eq-mstep 的封閉解，屬於標準 EM，沒有 regularization 或部分更新。Guard 失敗時（`em_check`）起點會直接中止並標記，不是另一種 M-step。
+
+Skill 把這個理論性質變成數值檢查：相對下降 $\le10^{-10}$ 視為浮點雜訊並計數，超過則標記，超過 $10^{-6}$ 判定為 `NUMERIC_ERROR`。
+
+## 收斂準則與它不能保證什麼
+
+Skill 在完整的 M+E 步之後檢查
+
+$$
+\frac{|\ell^{(t)}-\ell^{(t-1)}|}{1+|\ell^{(t-1)}|}<\mathrm{tol},\qquad \mathrm{tol}=10^{-6}\ (\text{預設}),\quad \texttt{max\_iter}=1000.
+$$ {#eq-stop}
+
+達到 `max_iter` 仍未符合是 `NOT_CONVERGED`，不算有效解。但這個準則只看一步：EM 走到 plateau 時步伐也很小。@sec-auto 的 Automobile $G=5$ 是真實例子：有兩個起點在 `tol = 1e-6` 下停止，繼續迭代後 log-likelihood 上升 6.85。Skill 的 `confirm_stage4.R` 因此以相同 EM 映射在更嚴格的 tol 下續跑，作為診斷。
+
+## 收斂到什麼
+
+單調性只說明 $\ell$ 不會下降，還有三個層次要分開：
+
+1. **$\ell$ 是否收斂。** 單調序列若有上界，才會收斂到有限值。GMM 的 $\ell$ 在整個參數空間沒有上界（@eq-unbounded），所以數學上需要額外的條件，例如迭代序列停留在 $\Sigma_i$ 特徵值有正下界的緊緻區域。
+2. **$\theta$ 是否收斂。** $\ell$ 收斂不代表 $\theta$ 收斂。
+3. **極限點是什麼。** 在適當的正則條件下，極限點是 $\ell$ 的駐點 [@wu1983，內容支持 UNVERIFIED]。駐點可能是局部最大，也可能是鞍點，更不必然是全域最大。
+
+Skill 的程式只檢查 @eq-stop，沒有檢查 Hessian，所以 `CONVERGED_VALID` 不代表已證明到達局部最大。
+
+::: {.callout-warning}
+## Guard 是數值有效性檢查，不是收斂保證
+`em_check` 的 guard（`min_effective_n`、Cholesky、$\kappa(\Sigma_i)\le10^{10}$）用來中止數值上不可接受的起點。它們**不是**上面第 1 點所需的數學條件。
+
+條件數有限並不保證最小特徵值有正下界。例如 $\Sigma=\varepsilon I$ 對所有 $\varepsilon>0$ 都有 $\kappa(\Sigma)=1$，但 $\lambda_{\min}(\Sigma)=\varepsilon$ 可以任意接近 0，$|\Sigma|=\varepsilon^p$ 也趨近 0。@eq-unbounded 用的 $\Sigma_1=\sigma^2I$ 正是這種情形，條件數檢查本身偵測不到。`min_effective_n` 限制的是有效樣本數，也不是特徵值的下界。
+
+因此，通過 guard **不保證** likelihood 有界、參數收斂，或得到局部最大值。`CONVERGED_VALID` 的意思只是：停止規則已滿足，而且在檢查過的迭代中這些數值條件都通過。
+:::
+
+# Initialization、局部最佳解與 Covariance Collapse {#sec-init}
+
+EM 只保證 @eq-monotone，不保證全域最佳。本文的「局部解」「局部最佳解」指數值上可區分的 EM 停止點，沒有證明它們是局部最大值。結果依賴起點，所以 Skill 採多起點策略，第 $s$ 個起點用 seed $=421+s-1$，並隔離全域亂數狀態（`with_seed()`）。
+
+## 四種初始化
+
+每種方法都只產生 responsibilities，初始 $\pi,\mu,\Sigma$ 一律由**同一個 M-step** 算出，E-step、M-step 與有效性檢查完全共用。
+
+| `--init` | 初始 $\tau$ | 隨機性 | 特性 | 在 `workflow.R` 中的途徑 |
+|---|---|---|---|---|
+| `kmeans`（預設） | k-means 硬分割 | 有 | 解集中；可能產生極小群而 `INVALID_START` | `stage4` 與計畫 |
+| `random` | 平衡分割後打亂 | 有 | 探索廣；每起點成本較高 | `stage4` 與計畫 |
+| `random-soft` | 每列 $\tau_j\sim\mathrm{Dirichlet}(1,\dots,1)$ | 有 | 同上；Dirichlet(1) 為**待審 heuristic** | 僅核准的計畫 |
+| `ward` | Ward.D2、Euclidean、依列順序切 $G$ 群 | 無 | 必須 `n_starts = 1`；ties 由列順序決定 | 僅核准的計畫 |
+
+計畫核准的限制只在整合 workflow 中完整執行。直接呼叫模組（例如 `select_stage4.R --init ward`）仍需要已核准的 Stage 3 規格，但不經過敏感度計畫。
+
+Dirichlet 抽樣由獨立 Gamma 正規化得到：$g_{ji}\sim\mathrm{Gamma}(1,1)$，$\tau_{ji}=g_{ji}/\sum_h g_{jh}$。
+
+::: {.callout-tip collapse="true" title="Skill 實際程式：em_init"}
+```{r}
+#| output: asis
+skill_code('scripts/em_stage4.R', 'em_init <- function', 29)
+```
+:::
+
+沒有任何一種方法永遠較佳。@sec-auto-f9 的試算顯示，隨機方法能到達 k-means 到不了的解，但命中率極低，起點少時甚至更差。
+
+## 有效性檢查
+
+每次 M-step 之後都會檢查，失敗的起點保留原因，**永遠不算有效最佳解**，也不加任何 regularization。
+
+| 條件 | 狀態 | 理由 |
+|---|---|---|
+| $\pi,\mu,\Sigma,\ell$ 非有限 | `NUMERIC_ERROR` | 更新無效 |
+| $N_i<$ `min_effective_n`（預設 $p+1$）或 $\pi_i\le0$ | `DEGENERATE` | 不足以支撐 full covariance |
+| Cholesky 失敗 | `DEGENERATE` | 數值上無法確認正定，無法以此計算密度 |
+| $\kappa(\Sigma_i)>10^{10}$ | `DEGENERATE` | 共變異數矩陣在不同方向上的相對尺度差異極大，可能導致數值不穩定或相對接近奇異；無法偵測所有特徵值等比例縮小的 covariance collapse（見 §6.6） |
+| 起點本身不合格 | `INVALID_START` | EM 沒有開始 |
+
+門檻 `min_effective_n` 與 $10^{10}$ 都是專案選擇，尚未校準。低於門檻的高條件數解**不會**被判無效，但應連同最小成分與最小特徵值一併呈現。
+
+# Model Selection：AIC 與 BIC {#sec-selection}
+
+Skill 採「越小越好」的定義：
+
+$$
+\mathrm{AIC}=-2\hat\ell+2k_G,\qquad \mathrm{BIC}=-2\hat\ell+k_G\log n.
+$$ {#eq-ic}
+
+mclust 回報的是 $2\hat\ell-k_G\log n$，符號相反。固定 $G$ 比較兩個解時 $k_G$ 不變，所以 $\Delta\mathrm{BIC}=\Delta\mathrm{AIC}=-2\Delta\ell$。
+
+**常見解釋。** AIC 由 @akaike1974 提出，通常解讀為在相差一個常數下，估計模型與真實分布的期望相對 KL 距離。BIC 由 @schwarz1978 提出，通常解讀為邊際概似的大樣本近似。這兩句是一般教科書的解讀；原文的逐項支持為 UNVERIFIED。
+
+::: {.callout-warning}
+## 限制
+1. 混合模型不滿足一般的正則條件：比較 $G$ 與 $G+1$ 時參數落在邊界，且成分可以不可辨識，所以 BIC 的標準推導不能直接套用，它是常用的實務準則（延伸閱讀：@mclachlan2000、@fraley2002；具體段落的支持為 UNVERIFIED）。
+2. 選出的 $G$ 等於搜尋上界時是**邊界解**，Skill 只警告，不會自動擴大搜尋（需要新的 Stage 3 核准）。
+3. 搜尋得到的最佳解若不是該 $G$ 下較好的非退化解，BIC 比較也會受影響，@sec-auto-f9 有實例。
+4. 成分數由 BIC 選出，並不代表真實群體數。多個 Gaussian 可以只是在逼近一個偏態分布。
+:::
+
+Skill 依 @kass1995 的尺度描述 $\Delta\mathrm{BIC}$。該尺度定義在 $2\log$ Bayes factor 上，把 $\Delta\mathrm{BIC}$ 代入是一種近似（目前只由次級來源確認，原文 UNVERIFIED）。Skill 並把 $\Delta\mathrm{BIC}\le 6$ 的模型留給 Stage 6 比較；這個 6 是待審 heuristic。沒有替代模型時屬於正常情況，報告會寫 `No alternative G was compared`。
+
+::: {.callout-note}
+## Skill 中的對應
+`s4_select()` 計算 @eq-kg、@eq-ic、選擇與邊界判斷，`s4_start_diagnostics()` 依對齊後的距離分群局部解。
+:::
+
+# Posterior、MAP Classification 與不確定性
+
+@eq-estep 的 $\tau_{ji}$ 即 **posterior responsibility**。Skill 用下列量描述分類：
+
+$$
+\hat z_j=\arg\max_i\tau_{ji},\qquad U_j=1-\max_i\tau_{ji}\in[0,1-1/G],\qquad \widetilde H_j=\frac{-\sum_i\tau_{ji}\log\tau_{ji}}{\log G}\in[0,1],
+$$ {#eq-uncertainty}
+
+其中 $0\log0=0$，$G=1$ 時 $\widetilde H_j=0$。$\widetilde H_j$ 是**正規化** entropy，與 @sec-validation 未正規化的 $H(U)$ 不同。MAP 同分時程式取編號最小的成分（`max.col(ties.method = 'first')`）。
+
+- $\pi_i$（模型估計的比例）與 MAP 比例不同：MAP 把軟分配變成硬分配，成分重疊時兩者會有差距。報告永遠分開呈現。
+- $U_j>0.10$ 只是列為「模糊觀測」的待審 heuristic，不會刪除或改判。
+- **Posterior 是在模型正確的假設下算出的機率，不是經過驗證的分類準確率。**
+
+若模型在 z-score 尺度估計，$S=\mathrm{diag}(s_k)$，$c$ 為中心（各變數平均），則原始單位的參數為
+
+$$
+\mu_o=c+S\mu_z,\qquad \Sigma_o=S\Sigma_zS.
+$$ {#eq-back}
+
+Posterior 在此變換下不變，Skill 會檢查這件事。Stage 5 也會以保存的參數重新計算 posterior，確認與保存的值相符，藉此偵測成分編號錯置。
+
+::: {.callout-tip collapse="true" title="Skill 實際程式：s5_uncertainty"}
+```{r}
+#| output: asis
+skill_code('scripts/interpret_stage5.R', 's5_uncertainty <- function', 4)
+```
+:::
+
+# Model Validation：ARI、NMI、Stability 與 Sensitivity {#sec-validation}
+
+## Adjusted Rand Index
+
+令 $n_{rs}$ 為分割 $U$ 第 $r$ 群與分割 $V$ 第 $s$ 群的共同列數，$a_r=\sum_s n_{rs}$，$b_s=\sum_r n_{rs}$（公式來源 @hubert1985，原文 UNVERIFIED；與 `s6_ari` 的程式一致）：
+
+$$
+\mathrm{ARI}=\frac{\sum_{r,s}\binom{n_{rs}}{2}-E}{\tfrac12\big[\sum_r\binom{a_r}{2}+\sum_s\binom{b_s}{2}\big]-E},\quad E=\frac{\sum_r\binom{a_r}{2}\sum_s\binom{b_s}{2}}{\binom n2}.
+$$ {#eq-ari}
+
+ARI 為 1 代表分割完全相同，約 0 代表機率水準，可以為負。當分母為 0 時，`s6_ari` 的約定是：兩個分割都只有一群則為 1，否則為 0。
+
+## Normalized Mutual Information
+
+令 $P_{rs}=n_{rs}/n$，$P_{r\cdot}$、$P_{\cdot s}$ 為邊際比例，則
+
+$$
+H(U)=-\sum_r P_{r\cdot}\log P_{r\cdot},\qquad I(U;V)=\sum_{r,s}P_{rs}\log\frac{P_{rs}}{P_{r\cdot}P_{\cdot s}} .
+$$ {#eq-mi}
+
+**Skill 的 `s6_nmi` 使用算術平均正規化：**
+
+$$
+\mathrm{NMI}_{\text{arith}}(U,V)=\frac{2\,I(U;V)}{H(U)+H(V)}.
+$$ {#eq-nmi}
+
+**這與幾何平均版本是不同的公式：**
+
+$$
+\mathrm{NMI}_{\text{geo}}(U,V)=\frac{I(U;V)}{\sqrt{H(U)H(V)}}.
+$$ {#eq-nmigeo}
+
+@strehl2002 第 2.2 節提到可用算術或幾何平均，實際採用 @eq-nmigeo。@vinh2010 的 Table 2 把 @eq-nmi 列為 $\mathrm{NMI}_{\text{sum}}$，把 @eq-nmigeo 列為 $\mathrm{NMI}_{\text{sqrt}}$，並比較多種版本。Skill 的算術平均是專案選擇（待審項目），不要把它和幾何平均的數值直接比較。
+
+**`s6_nmi` 的特殊情況：** $H(U)+H(V)=0$（兩個分割都只有一群）時回傳 1；只有一個分割是單群時 $I=0$，回傳 0；結果會截斷在 $[0,1]$。
+
+ARI、NMI 只看分割，不看編號，所以不需要對齊成分。**Matched agreement** 是另一個量，先找最佳一對一配對再算一致比例，Skill 把它分開呈現。
+
+## Stage 6 的四個部分
+
+| 部分 | 內容 | 重要限制 |
+|---|---|---|
+| 6A Stability | 多起點的局部解分布、對齊後參數差；核准的 replay 可算分割層級 ARI | 只看起點穩定性，不是抽樣穩定性 |
+| 6B Sensitivity | 選定 $G$ 與替代 $G$ 的比較，由保存的參數計算、不重新擬合；SPLIT、MIXED、KEPT 從交叉表判讀 | 門檻 10%、80% 為待審 heuristic |
+| 6C External validation | ARI、NMI、交叉表 | 標籤只在此讀取，不參與估計；沒有標籤時顯示 Not Performed |
+| 6D Profiling | 成分特徵、可選的分層描述 | Substantive interpretation 一律為 not established |
+
+**指標定義。** 6A 的 share 為達到最佳局部解的有效起點比例。6B 以交叉表 $T_{ab}$（選定模型成分 $a$、替代模型成分 $b$）計算：
+
+$$
+\mathrm{share}_{ab}=\frac{T_{ab}}{\sum_{b'}T_{ab'}},\qquad \mathrm{purity}_b=\max_a\frac{T_{ab}}{\sum_{a'}T_{a'b}} .
+$$ {#eq-split}
+
+令 $a^*(b)$ 為使 $T_{ab}$ 最大的 $a$。若至少兩個 $b$ 滿足 $a^*(b)=a$、$\mathrm{share}_{ab}\ge0.10$、$\mathrm{purity}_b\ge0.80$，就標記 SPLIT；$\mathrm{purity}_b<0.80$ 為 MIXED；$\mathrm{purity}_b\ge0.80$ 且 $\mathrm{share}_{a^*b}\ge0.90$ 為 KEPT。這些門檻是待審 heuristic。
+
+高 ARI 不代表成分就是自然群組，低 ARI 也不代表標籤是錯的。
+
+::: {.callout-warning}
+## 尚未實作
+Bootstrap／subsampling 穩定性與 split-sample 驗證在規格中列為選用，**目前沒有實作**，報告標示為 `NOT RUN`。
+:::
+
+# Missing Data {#sec-missing}
+
+## 缺失機制
+
+令 $M$ 為缺失指標矩陣，資料分為 $X_{\text{obs}},X_{\text{mis}}$ [@rubin1976; @little2019，內容支持 UNVERIFIED]：
+
+$$
+\begin{aligned}
+\text{MCAR:}\quad & P(M\mid X_{\text{obs}},X_{\text{mis}})=P(M),\\
+\text{MAR:}\quad & P(M\mid X_{\text{obs}},X_{\text{mis}})=P(M\mid X_{\text{obs}}),\\
+\text{MNAR:}\quad & P(M\mid X_{\text{obs}},X_{\text{mis}})\ \text{依賴 } X_{\text{mis}}.
+\end{aligned}
+$$ {#eq-missing}
+
+上式是常見的 everywhere MAR 寫法，對所有可能的資料值成立。Rubin 的原始定義是針對**實際觀察到**的缺失型態與資料（realised MAR），兩者不同 [@seaman2013]。MAR 再加上參數區分條件，缺失機制才可以在概似推論中忽略（ignorability）。
+
+MAR 與 MNAR **無法只靠觀測資料區分**，所以 Skill 只報告缺失型態，不推論機制，並會詢問研究設計。
+
+## Skill 實際支援的方法
+
+| 選項 | 可執行 | 主要風險 |
+|---|---|---|
+| Diagnostics only | 是 | 只產生報告，不改資料，不擬合 |
+| Complete-case | 是 | 非 MCAR 時有選擇偏誤；損失樣本 |
+| Mean / Median | 是 | 壓縮變異、扭曲共變異；可能製造人工堆積 |
+| KNN（使用者指定 $k$） | 是 | 單一插補，不反映插補不確定性 |
+| Multiple imputation | **否** | 未實作 |
+| 直接以觀測資料概似的 missing-data EM | **否** | 未實作 |
+
+單一插補的問題可以這樣理解。把變數的 $n_{\text{mis}}$ 個缺失值換成觀測平均，填入值對離均差平方和的貢獻為 0，因此
+
+$$
+s^2_{\text{imp}}=\frac{n_{\text{obs}}-1}{n-1}\,s^2_{\text{obs}} .
+$$ {#eq-meanimp}
+
+這是恆等式。若再假設 $s^2_{\text{obs}}$ 能代表真實變異（例如 MCAR），插補後的變異約為真實值的 $(1-n_{\text{mis}}/n)$ 倍。共變異的壓縮程度取決於兩個變數各自與共同的缺失型態，不一定是同一個比例。中位數插補的填入值對平方和仍有貢獻，式子不同。
+
+## KNN 的實際定義
+
+Skill 的 KNN 是專案自行實作的基準方法（`knn_impute()`），不是通用套件。對列 $i$ 的缺失變數 $j$：
+
+1. **預測變數** $\mathcal{A}_i$：列 $i$ 有觀測、且不是 $j$ 的變數。
+2. **候選 donor** $\mathcal{C}$：同時觀測到 $j$ 與全部 $\mathcal{A}_i$ 的列。
+3. 以候選 donor 的平均與標準差將 $\mathcal{A}_i$ 標準化（標準差為 0 時設為 1）。
+4. 距離 $d^2_{iu}=\sum_{a\in \mathcal{A}_i}(z_{ia}-z_{ua})^2$，依 $(d^2,\text{列位置})$ 排序取前 $k$ 個。
+5. 插補值 $\hat x_{ij}=k^{-1}\sum_{u\in N_k(i)}x_{uj}$，**只用原始觀測值**，插補值不會成為 donor。
+
+```{r}
+#| output: asis
+cat('::: {.callout-tip collapse="true" title="Skill 實際程式：knn_impute（節錄）"}\n'); skill_code('scripts/data_stage2.R', 'knn_impute <- function', 38); cat(':::\n')
+```
+
+全部變數都缺失的列無法處理，Skill 會暫停並列出（`KNN_ALL_MISSING_ROWS`），由使用者決定；不會自動刪除或改用平均。每次 KNN 都會寫出 donor 稽核檔。
+
+# Part III — GMM Skill Design and Implementation {.unnumbered}
+
+# 三種知識來源要分清楚 {#sec-sources}
+
+這份 Skill 的內容來自三個不同層次，混在一起就會誤導讀者。
+
+| 層次 | 內容 | 例子 |
+|---|---|---|
+| **Hair 第 4 章支持的分析概念** | 六階段結構（pp. 199–229）、研究目標與變數選擇（pp. 199–202）、標準化（pp. 208–210）與離群值（pp. 204–205）、代表性與共線性（pp. 211–212）、model-based clustering（pp. 225–227）、解釋（pp. 227–228）與驗證（pp. 228–229） | 六階段本身 |
+| **GMM 統計方法本身** | 模型、EM、AIC/BIC、posterior、ARI/NMI、缺失機制 | @eq-mstep、@eq-ic |
+| **本專案的實作規則** | Approval Gates、狀態碼、門檻、多起點設定、KNN 細節、模型登記 | $p+1$、$10^{10}$、seed 421 |
+
+::: {.callout-warning}
+## Skill 與 Hair 的關係：參考並延伸，不是完全相同
+上表第一列已對照原書第 8 版第 4 章核對，頁碼為書上印刷頁。三份專案文件引用的頁碼經核對都正確：`stage4-model-fitting.md` pp. 226–227、`stage5-interpretation.md` pp. 227–228、`stage6-validation.md` pp. 228–229。
+
+下面三點是本 Skill 刻意和原書不同的地方。
+
+- **常態性。** 原書指出，常態等假設對一般分群方法影響很小（p. 211），因為一般分群以距離為基礎，不是推論技術。GMM 則假設**每個成分**是多變量常態，所以 Stage 3 的 Gaussian working model 檢查是 GMM 專屬的設計，不是原書的規則。
+- **命名。** 原書建議依剖繪結果替各群取描述性名稱（pp. 227–228）。本 Skill 不替成分命名，這是本專案的保守解釋原則：Gaussian 成分不一定是真實群體。
+- **小群。** 原書建議先移除單一成員或過小的群再重跑（p. 224）。本 Skill 不刪除資料列，只發出警告。
+
+此外，原書只說明以 EM 估計，沒有提供 M-step 公式；本文的公式推導不以原書為依據。
+:::
+
+# 六階段 Decision Tree {#sec-decision}
+
+下圖整合 `references/decision-tree.md`（Stage 1–3 的 Q1–Q10）與 Stage 4–6 的規格及實作。
+
+```{mermaid}
+flowchart TD
+  S1["Stage 1 目標<br/>clustering 或 density？<br/>觀測單位與變數？"] -->|清楚| S2["Stage 2 研究設計<br/>完整 EDA 與缺失診斷"]
+  S1 -->|不清楚| P1["PAUSE：詢問使用者"]
+  S1 -->|超出範圍| X1["STOP：說明替代方法"]
+  S2 --> Q4{"資料是否有限？"}
+  Q4 -->|NA / NaN| M["PAUSE：缺失處理選單<br/>complete-case, mean, median, KNN, diagnostics"]
+  M --> S2
+  Q4 -->|Inf| X2["BLOCKED：修正資料"]
+  Q4 -->|是| S3["Stage 3 假設與可行性<br/>S3-01 至 S3-15"]
+  S3 -->|需要決定| P3["PAUSE：尺度、目標、獨立性、G"]
+  P3 --> S3
+  S3 -->|STOP| X3["BLOCKED：修改設計"]
+  S3 -->|使用者核准| S4["Stage 4 多起點 EM<br/>診斷與 BIC / AIC"]
+  S4 -->|無有效模型| X4["BLOCKED：STOP_NO_VALID_MODELS"]
+  S4 --> S5["Stage 5 解釋<br/>參數、posterior、不確定性"]
+  S5 --> S6["Stage 6 驗證與剖繪<br/>穩定性、敏感度、外部標籤"]
+  S6 --> R["最終報告"]
+  S4 -.-> SP["敏感度計畫<br/>經核准才執行"]
+  SP -.->|Candidate Model| AC{"使用者決定切換？"}
+  AC -.->|activate-model| S5
+```
+
+::: {.callout-note}
+## `density` 目標的現況
+`clustering` 與 `density` 都可以選，也會被驗證並記錄在規格與報告中，但目前**沒有真正控制 Stage 5–6 的分流**：`interpret_stage5.R`、`validate_stage6.R` 沒有依目標改變流程。S3-13 的理由文字描述的是設計意圖。
+:::
+
+## 各階段的檢查、方法與統計理由
+
+| Stage | 主要檢查與輸出 | 統計理由 | 使用者決定 |
+|---|---|---|---|
+| 1 目標 | 分析目的、觀測單位、變數角色 | GMM 是否適用取決於問題 | 確認目標與變數 |
+| 2 研究設計 | 描述統計、直方圖、盒形圖、散佈圖矩陣、Pearson/Spearman、共線性；缺失型態 | 缺失與分布會影響概似與成分 | 選擇缺失處理方法 |
+| 3 假設與可行性 | S3-01 至 S3-15（見下） | Full-covariance 的可估計性；獨立性無法由資料證明 | 尺度、獨立性、候選 $G$ |
+| 4 擬合 | 4A 設定、4B 多起點 EM、4C 收斂與局部解、4D BIC/AIC | @sec-init、@sec-selection | 確認結果 |
+| 5 解釋 | $\pi$ 與 MAP、平均與共變異、原始單位、不確定性、PCA 僅供視覺 | 成分是密度成分，不命名（本專案的保守原則；原書建議命名，見 @sec-sources） | 確認解釋 |
+| 6 驗證 | 6A–6D | 只比較保存的結果，不用標籤重選 $G$ | 是否 replay |
+
+Stage 3 共 15 項檢查，整體狀態取最嚴重者（STOP > PAUSE > WARNING > PASS）。PAUSE 與 STOP 不能靠核准跳過。
+
+| ID | 檢查 | ID | 檢查 | ID | 檢查 |
+|---|---|---|---|---|---|
+| S3-01 | 輸入完整性 | S3-06 | 尺度決定 | S3-11 | 候選 $G$ 與 $k_G$ |
+| S3-02 | 連續性語意 | S3-07 | 離群值篩選 | S3-12 | 共變異結構 |
+| S3-03 | 零變異 | S3-08 | ties 與重複列 | S3-13 | 分析目標 |
+| S3-04 | Rank | S3-09 | 合併共變異條件 | S3-14 | 列獨立性 |
+| S3-05 | 近似共線 | S3-10 | Gaussian working model | S3-15 | 核准 |
+
+# Skill 的架構
+
+```{r}
+tests <- grep('^All ', reg, value = TRUE); sc <- list.files(file.path(SKILL, 'scripts')); tf <- list.files(file.path(SKILL, 'tests')); rf <- list.files(file.path(SKILL, 'references'))
+```
+
+```text
+.claude/skills/multivariate-gmm/
+├── SKILL.md          何時啟用、整體流程、CLI、每個關卡要呈現什麼
+├── references/       規格與清單，需要時才讀（progressive disclosure）
+├── scripts/          R 程式，負責所有計算
+├── tests/            自動化測試
+└── example_data/     示範資料
+```
+
+| 元件 | 角色 | 數量 |
+|---|---|---|
+| `SKILL.md` | frontmatter 的 `description` 決定何時啟用，本文規定流程 | 1 |
+| `references/` | Decision Tree、Stage 規格、Outcome contract、待審清單 | `r length(rf)` 份 |
+| `scripts/` | 計算與流程控制 | `r length(sc)` 支 |
+| `tests/` | 公式、流程、誠實性 | `r n_tests` 項檢查 |
+
+| 腳本 | 功能 |
+|---|---|
+| `data_import.R` | 唯讀 preview 與確認後的 import |
+| `data_stage2.R`、`eda_stage2.R`、`knn_audit.R` | 缺失診斷與處理、EDA、KNN 稽核 |
+| `feasibility_stage3.R` | Stage 3 檢查與核准規格 |
+| `em_stage4.R` | EM 核心與初始化 |
+| `select_stage4.R` | 收斂診斷與 BIC/AIC |
+| `confirm_stage4.R` | 收斂確認（診斷用） |
+| `interpret_stage5.R` | 解釋與不確定性 |
+| `validate_stage6.R` | 穩定性、敏感度、外部驗證、剖繪 |
+| `workflow.R`、`sensitivity_workflow.R` | 狀態機、關卡、模型登記、敏感度流程 |
+| `warnings_registry.R`、`report_final.R` | 限制紀錄與最終報告 |
+
+**為什麼用 base R 自己寫 EM？** 為了完全掌握每一步的有效性檢查與失敗紀錄。mclust 只用在 `tests/` 當獨立驗證，不參與正式估計。
+
+::: {.callout-note}
+## 文件與程式不一致時以程式為準
+部分 `references/` 文件保留了開發早期的狀態描述，待修清單在 @sec-pending。本文的說明都以實作為準。
+:::
+
+# Approval Gates
+
+Approval Gates 有兩種，強度不同：**R 程式強制**的關卡，沒有核准旗標就會 REFUSED；**`SKILL.md` 指示**的關卡，則靠 Claude 遵守流程，程式本身只檢查順序。
+
+| 關卡 | 呈現給使用者 | 需要的動作 | 強制方式 |
+|---|---|---|---|
+| `preview` → `import` | 大小、欄位、缺失標記 | 確認設定，`--approved true` 與 `--approval-ref` | R 程式 |
+| `new-run` | 分析變數、目標 | `--approved true` 與 `--approval-ref` | R 程式 |
+| `stage2` | EDA、缺失型態 | 從選單選方法 | `SKILL.md`（選單內容）；處理需下一列 |
+| `stage2-handle` | 處理後摘要；或 KNN 暫停選單 | `--approved true` | R 程式 |
+| `stage3` | 檢查與待決定事項 | 尺度、獨立性、$G$，`--approved true` | R 程式；`stage4` 要求已核准規格 |
+| `stage4`、`stage5`、`stage6` | 收斂、BIC/AIC、解釋、驗證 | 使用者確認 | **`SKILL.md`**；程式只檢查順序 |
+| `stage6-replay` | 重跑設定 | `--approved true` | R 程式 |
+| `sensitivity-plan` | 差異、初始化方法、工作量 | `sensitivity-run --approved true` 與 `--approval-ref` | R 程式 |
+| `sensitivity-run` | 與 Active Model 的比較、所有警告 | `activate-model --approved true` 或 `sensitivity-close` | R 程式 |
+
+`--approved true` 只能在使用者於對話中明確核准該動作後才傳入，而且**核准不能把 BLOCKED 變成 SUCCESS**。
+
+# Workflow、Candidate Model 與 Active Model {#sec-workflow}
+
+一個分析對應一個目錄與一份 `workflow_state.json`。每個命令只做一個 Stage，並在最後印出下一步。
+
+- **Active Model**：Stage 5、6 與報告唯一讀取的模型。第一次 `stage4` 的結果會成為 Active。
+- **Candidate Model**：已登記但未啟用的模型。模型 ID 是 `G<g>-<selected_model.rds 雜湊前 12 碼>`。
+- **切換只有一條路**：`activate-model --approved true`，且會先做完整性檢查。最佳 BIC 不會自動取代 Active。
+
+```{mermaid}
+stateDiagram-v2
+  [*] --> PLANNED: sensitivity-plan
+  PLANNED --> RUNNING: 使用者核准 sensitivity-run
+  PLANNED --> WITHDRAWN: 撤回
+  RUNNING --> FIT_COMPLETED
+  RUNNING --> BLOCKED: 無有效模型
+  FIT_COMPLETED --> CONFIRMED: 收斂確認
+  FIT_COMPLETED --> CANDIDATE_REGISTERED: tol 已夠嚴
+  CONFIRMED --> CANDIDATE_REGISTERED
+  CONFIRMED --> NO_NEW_CANDIDATE: 與既有模型相同
+  CANDIDATE_REGISTERED --> CLOSED_KEEP_ACTIVE: 保留 Active
+  FIT_COMPLETED --> NO_NEW_CANDIDATE: 與既有模型相同
+  CANDIDATE_REGISTERED --> [*]: activate-model
+  RUNNING --> FAILED: 擬合失敗
+  FIT_COMPLETED --> FAILED: 確認、比較或驗證失敗
+  CONFIRMED --> FAILED: 比較或驗證失敗
+  FAILED --> WITHDRAWN: 撤回
+  BLOCKED --> WITHDRAWN: 撤回
+```
+
+尚未結束的狀態（`RUNNING`、`FIT_COMPLETED`、`CONFIRMED`）也可以用 `sensitivity-close --decision withdraw` 撤回，圖中省略；中斷的執行無法原地續跑。
+
+一個計畫只用一種初始化方法。`plan.json` 記錄設定、`init_spec`、`rng_kind` 與資料雜湊；內容被改動就拒絕執行，擬合方法與計畫不符也不會登記。
+
+# F7 Outcome Contract：錯誤、BLOCKED 與 PAUSE {#sec-outcome}
+
+這三者常被混為一談，但處理方式完全不同。
+
+| Outcome | Exit | 意義 | 例子 | 怎麼處理 |
+|---|---|---|---|---|
+| `SUCCESS` | 0 | 完成；WARNING 也算成功但要揭露 | Stage 完成 | 進行下一步 |
+| `AWAITING_USER_APPROVAL` | 2 | **正常關卡**，輸出已完成 | 缺失選單、KNN 暫停 | 使用者決定 |
+| `BLOCKED` | 3 | **統計或資料判斷**：此請求無法估計 | Stage 3 STOP、Inf、無有效模型 | 修改設計，核准無效 |
+| `ERROR` | 1 | 程式或輸入失敗 | 參數不合法 | 修正指令或錯誤 |
+| `REFUSED` | 4 | 現在不允許 | 順序錯、缺核准、檔案被改 | 補足前置條件 |
+
+REFUSED 通常發生在任何計算之前。例外是敏感度執行途中的完整性檢查失敗：已完成的輸出會保留，計畫標記為 `FAILED`，命令的 Outcome 為 REFUSED。
+
+`workflow.R`、`data_import.R`、`data_stage2.R`、`feasibility_stage3.R`、`select_stage4.R` 會在最後印出可機器讀取的 `Outcome`、`Exit-Code`、`Stage`、`Code`、`Next-Action`。獨立呼叫 Stage 5、Stage 6、report、registry、收斂確認與 KNN 稽核的 CLI，目前只有 exit code 0 與 1，沒有這些行；透過 `workflow.R` 執行 Stage 5、6 時則有。
+
+# R、CLI、測試與可重現性
+
+**CLI。** 從專案根目錄執行：
+
+```bash
+Rscript .claude/skills/multivariate-gmm/scripts/workflow.R stage4 --root results/<name>
+```
+
+**可重現性的做法**
+
+- **種子排程**：起點 $s$ 用 $421+s-1$，`with_seed()` 還原全域亂數狀態，RNG 種類記在每個起點。
+- **綁定資料**：`spec_hash`、`approval_id`、資料與模型檔的雜湊。
+- **不覆寫**：輸出先寫到 staging 目錄，驗證後才移入；非空目錄一律拒絕。
+- **replay**：`confirm_stage4` 與 Stage 6 replay 依紀錄重現起點，不一致就停止。
+
+```{r}
+#| output: asis
+src('diagnostic', 'tutorial/evidence/test-run/full_regression_summary.txt（F13 驗收時的完整回歸，保存副本）', sprintf('R 4.5.1；%d 項檢查', n_tests), '代表該次執行時的測試狀態；Skill 在該次之後未再修改')
+```
+
+```{r}
+t2 <- data.frame(`測試結果` = sub(' checks passed', '', sub('^All ', '', tests)), check.names = FALSE); tbl(t2)
+```
+
+測試不只檢查公式，也檢查誠實性：例如不合法的 `--init` 必須回報 ERROR、未核准不得執行、報告不得出現不適用的資料集文字、k-means 結果必須與舊版完全相同。mclust 的比較也寫在測試中。
+
+# Part IV — Real Data Analysis and Workflow Demonstration {.unnumbered}
+
+# Palmer Penguins {#sec-penguins}
+
+```{r}
+#| output: asis
+src('approved', 'results/penguins/（stage2、stage3/approved、stage4/selection-G1-5、stage5/interpretation-G3、stage6/validation-G3-vs-G4-with-replay）；圖表取自 final-report-registry/', 'G = 1–5，20 starts，seed 421，tol 1e-6，max_iter 1000，k-means，z-score，VVV', '逐模組執行並逐階段核准；無 workflow_state.json。外部標籤 species 僅用於 Stage 6')
+```
+
+## 資料與問題
+
+資料來自 @horst2020 與 @gorman2014，共 344 列。四個連續變數（`bill_length_mm`、`bill_depth_mm`、`flipper_length_mm`、`body_mass_g`）進入模型；`species` 保留為外部標籤，**不參與估計**。
+
+## Stage 2：缺失與 EDA
+
+```{r}
+tbl(rd(P_('stage2/diagnostics/variable_missing.csv'))[, 1:3], col.names = c('變數', '缺失數', '缺失率'), digits = 4)
+pl <- rj(P_('stage2/complete-case/preprocessing_log.json'))
+```
+
+缺失型態只有兩種：完整，或四個變數全缺。全缺的列（來源列 `r paste(pl$rows_removed$source_row_ids, collapse = '、')`）沒有資訊可以插補，使用者核准 complete-case，保留 `r pl$rows_retained` 列。
+
+![四個變數的分布](`r pfig('stage2_diagnostics__eda_distributions.png')`){width=85%}
+
+![散佈圖矩陣](`r pfig('stage2_diagnostics__eda_scatter_matrix.png')`){width=75%}
+
+## Stage 3：可行性
+
+```{r}
+c3 <- rd(P_('stage3/approved/stage3_checks.csv')); tbl(as.data.frame(table(狀態 = c3$status)), col.names = c('狀態', '檢查數'))
+```
+
+三個 WARNING 是離群值篩選（S3-07）、$G=5$ 的成分樣本偏少（S3-11），以及列獨立性（S3-14）。獨立性是 working assumption，來自 Stage 3 核准規格：個體 ID 重複出現，無法排除重複量測。
+
+## Stage 4：BIC 與 AIC
+
+```{r}
+#| label: tbl-pcmp
+#| tbl-cap: "Penguins 各 G 的模型比較"
+x <- pcmp[, c('G', 'k_G', 'loglik', 'BIC', 'delta_BIC', 'AIC', 'delta_AIC', 'n_valid_starts', 'n_starts_reaching_best', 'n_distinct_optima')]; x[, 3:7] <- lapply(x[, 3:7], round, 2); tbl(x, col.names = c('G', 'k', 'loglik', 'BIC', 'ΔBIC', 'AIC', 'ΔAIC', '有效起點', '達最佳', '局部解'))
+```
+
+BIC 選 $G=3$，AIC 偏好 $G=4$。AIC 的懲罰每個參數為 2，BIC 為 $\log n=$ `r fx(log(342),2)`，所以 AIC 傾向較大的 $G$。$G=3$ 有 `r g(pcmp,3,'n_distinct_optima')` 個局部解，20 個起點中 `r g(pcmp,3,'n_starts_reaching_best')` 個到達最佳。
+
+![BIC 與 AIC](`r pfig('stage4__bic_aic.png')`){width=75%}
+
+## Stage 5：成分解釋
+
+```{r}
+#| label: tbl-pcomp
+#| tbl-cap: "Penguins G = 3 的成分（原始單位）"
+m <- pcm[pcm$scale == 'original', -1]; x <- merge(pcs[, c('component', 'mixing_proportion', 'effective_n', 'MAP_count')], m, by = 'component'); x[, 2:3] <- lapply(x[, 2:3], round, 3); x[, 5:8] <- lapply(x[, 5:8], round, 2); tbl(x, col.names = c('成分', 'π', '有效 n', 'MAP 列數', 'bill length', 'bill depth', 'flipper', 'body mass'))
+```
+
+$\pi$ 與 MAP 比例非常接近，表示成分重疊很少；整體平均不確定性為 `r fs(punc$overall$mean_U)`，最大為 `r fx(punc$overall$max_U,3)`。成分 2 嘴喙較淺、鰭肢較長、體重較重。**這裡只描述參數，不替成分命名。**
+
+![標準化平均剖面](`r pfig('stage5__mean_profile_standardized.png')`){width=75%}
+
+## Stage 6：驗證
+
+```{r}
+#| label: tbl-pxt
+#| tbl-cap: "成分與外部標籤的交叉表（僅事後比較）"
+lb <- rd(P_('stage6/validation-G3-vs-G4-with-replay/component_label_table.csv')); lb <- lb[lb$model_G == 3, ]; tbl(xtabs(count ~ component + label, lb) |> as.data.frame.matrix() |> cbind(成分 = 1:3, a = _) |> (\(d) d[, c('成分', 'a.Adelie', 'a.Chinstrap', 'a.Gentoo')])(), col.names = c('成分', 'Adelie', 'Chinstrap', 'Gentoo'))
+```
+
+選定模型的 ARI $=$ `r fx(pev$selected$ARI,4)`，NMI $=$ `r fx(pev$selected$NMI,4)`，替代模型 $G=4$ 的 ARI $=$ `r fx(pev$alternatives$G4$ARI,4)`。一致性很高，但 **標籤不用於重新選 $G$，而 Gaussian 成分也不因此被證明就是物種**。Substantive interpretation 仍為 not established。
+
+![多起點穩定性](`r pfig('stage6__stability_plot.png')`){width=85%}
+
+穩定性方面，$G=3$ 達最佳的起點比例為 `r fx(g(pst,3,'share_near_best'),2)`，同一最佳解內的分割 ARI 為 `r fx(g(pst,3,'partition_mean_ari_near_best'),3)`；納入其他局部解後平均 ARI 降到 `r fx(g(pst,3,'partition_mean_ari_all_valid'),3)`，說明局部解確實對應不同分割。
+
+# UCI Automobile {#sec-auto}
+
+```{r}
+n_a <- 205; ka <- aw$k_G
+```
+
+這個案例的價值在於**結論不穩定**：它展示 KNN 插補、局部最佳解、數值穩定與 $G$ 選擇的不確定性。分析變數為 `engine-size`、`horsepower`、`curb-weight`、`city-mpg`，$n=205$，$p=4$ [@uciautomobile]。Make 與 price 沒有當作真實標籤，所以 6C 為 Not Performed。
+
+## 證據層級總覽
+
+| 結果 | 層級 | 地位 |
+|---|---|---|
+| 原始 workflow Stage 4，$G=5$ | 已核准正式結果 | 仍是 `workflow_state.json` 指向的模型 |
+| 敏感度工作模型，$G=5$ | 已核准工作模型 | 核准用於 Stage 5–6 與報告，不取代上列 |
+| 收斂確認 | 診斷資料 | 說明原始模型為何偏低，本身不換模型 |
+| mclust VVV | 驗證對照 | 只比較，不估計 |
+| F9 初始化試算 | 未採用的暫存區試算 | 未核准，未登記 |
+
+## Stage 2：KNN 插補
+
+```{r}
+#| output: asis
+src('approved', 'results/automobile/workflow/stage2-knn/；donor 稽核 results/automobile/stage2-knn-audit/', 'KNN，k = 5，由使用者核准', 'horsepower 兩格單一插補；不反映插補不確定性')
+```
+
+```{r}
+dn <- rd(A_('stage2-knn-audit/knn_audit_donors.csv')); ce <- rd(A_('stage2-knn-audit/knn_audit_cells.csv'))
+x <- dn[dn$cell_id == 'C00001', c('rank', 'donor_source_row_id', 'distance', 'donor_value', 'tied_with_previous')]; x$distance <- round(x$distance, 4); tbl(x, col.names = c('順位', 'donor 來源列', '距離', 'donor horsepower', '與前一名同距'))
+```
+
+來源列 131、132 的 horsepower 缺失。`knn_audit` 顯示兩格的插補值都是 `r ce$imputed_value[1]`，稽核檔的 `n_distinct_donor_profiles` 為 `r ce$n_distinct_donor_profiles[1]`，表示這些 donor 中有規格相同的列。這個值只是描述，**不是有效樣本數**。這兩列屬於同一品牌，donor 全來自其他品牌，這是核准紀錄明列的限制。
+
+## 原始 Stage 4 與敏感度工作模型
+
+```{r}
+#| output: asis
+src('approved', 'results/automobile/workflow/stage4-selection/', '20 starts，seed 421，tol 1e-6，max_iter 1000，k-means', '已核准的 Stage 4 模型')
+src('working', 'results/automobile/stage4-sensitivity/；核准紀錄 results/automobile/sensitivity_model_approval_record.md', '100 starts，seed 421，tol 1e-8，max_iter 5000，k-means', '核准作為 Stage 5 的工作模型，Stage 6 與報告另經使用者確認；不取代上一個模型')
+src('diagnostic', 'results/automobile/stage4-confirmation-tol1e-8/', '續跑原 20 起點至 tol 1e-8', '診斷；不換模型')
+```
+
+```{r}
+#| label: tbl-astages
+#| tbl-cap: "原始 Stage 4、工作模型與收斂確認的 log-likelihood"
+x <- data.frame(G = aw$G, k = aw$k_G, a = round(aw$loglik, 3), b = round(as4$loglik, 3), c = round(acf$strict_loglik, 3), d = round(aw$BIC, 2), e = round(as4$BIC, 2), f = paste0(as4$n_valid_starts, '/', as4$n_starts), o = as4$n_distinct_optima); tbl(x, col.names = c('G', 'k', '原始 ℓ', '工作模型 ℓ', '確認後 ℓ', '原始 BIC', '工作模型 BIC', '工作模型有效起點', '局部解'))
+```
+
+```{r}
+cfs <- rd(A_('stage4-confirmation-tol1e-8/confirmation_starts.csv')); pre <- cfs[cfs$G == 5 & cfs$classification == 'POSSIBLE_PREMATURE_STOP', ]; bb <- acf[acf$G == 5, ]
+```
+
+這裡有兩個不同的量，不能混用：
+
+- **最佳值的變化。** `tol = 1e-6` 下 $G=5$ 的最佳值是 `r fx(g(aw,5,'loglik'),3)`（起點 `r bb$original_best_start`）。同一組 20 個起點續跑到 `tol = 1e-8` 後，最佳值變成 `r fx(bb$strict_loglik,3)`，但達到它的是**另一個**起點（起點 `r bb$strict_best_start`）。兩個最佳值相差 `r fx(bb$delta_loglik,2)`，$\Delta$BIC 為 `r fx(bb$delta_BIC_fixed_G,2)`。
+- **同一起點的增益。** 起點 `r paste(pre$start, collapse = '、')` 原本停在 `r fx(pre$original_loglik[1],3)`，續跑後增加 `r fx(pre$gain[1],2)`，被標為 `POSSIBLE_PREMATURE_STOP`。原本的最佳起點則沒有實質變化。
+
+也就是說，**「收斂」只代表停止規則被滿足**。
+
+![敏感度工作模型的 BIC 與 AIC](`r afig('stage4__bic_aic.png')`){width=75%}
+
+BIC 與 AIC 都選 $G=5$，而 5 正是搜尋上界，屬於邊界解。
+
+## Stage 5 與 Stage 6（工作模型）
+
+```{r}
+#| label: tbl-acomp
+#| tbl-cap: "Automobile 工作模型 G = 5 的成分（原始單位）"
+m <- acm[acm$scale == 'original', -1]; x <- merge(acs[, c('component', 'mixing_proportion', 'effective_n', 'MAP_count', 'n_ambiguous_MAP')], m, by = 'component'); x[, 2:3] <- lapply(x[, 2:3], round, 3); x[, 6:9] <- lapply(x[, 6:9], round, 1); tbl(x, col.names = c('成分', 'π', '有效 n', 'MAP', '模糊列', 'engine-size', 'horsepower', 'curb-weight', 'city-mpg'))
+```
+
+每個成分的有效樣本都低於 Stage 3 的 $5\times14$ 建議值。穩定性也弱：100 個起點中有 `r g(ast,5,'n_valid')` 個有效，形成 `r g(ast,5,'n_distinct_optima')` 個局部解，只有 `r g(as4,5,'n_starts_reaching_best')` 個到達最佳。替代模型 $G=4$ 與工作模型的 ARI 為 `r fx(ase$ARI_vs_selected[ase$G==4],3)`。
+
+## mclust 驗證對照
+
+```{r}
+#| output: asis
+src('validation', 'results/automobile/stage4-mclust-comparison/em_vs_mclust.csv', 'mclust::Mclust(G, VVV)；tight 列兩邊 tol 皆 1e-12', '只比較數值；mclust 不參與正式估計，也不是核准模型')
+```
+
+```{r}
+#| label: tbl-amclust
+#| tbl-cap: "本流程與 mclust 的 log-likelihood（tight 設定）"
+x <- amc[grepl('tight', amc$setting), c('G', 'loglik_ours', 'loglik_mclust', 'd_loglik')]; x[, 2:4] <- lapply(x[, 2:4], round, 3); x$w <- ifelse(x$d_loglik > 0, '本流程較高', ifelse(x$d_loglik < -1e-3, 'mclust 較高', '相同')); tbl(x, col.names = c('G', '本流程', 'mclust', '差', '誰較高'))
+```
+
+只有 $G=4$ 是 mclust 較高，這正是 F9 的起點。兩者最大化同一個概似，所以初始化是主要懷疑對象。下面的暫存區試算用 mclust [@scrucca2016] 的 `hc` 分割當作單一起點，接上 Skill 未修改的 EM 來檢驗這一點。
+
+```{r}
+#| output: asis
+src('scratch', 'tutorial/evidence/f9-initialization/data/f9_mb_auto.csv；腳本 scripts/f9_trial_mb.R；紀錄 logs/f9_mb_auto.log', 'mclust::hc(modelName = "VVV", use = "SVD") 的分割作為單一起點，接 Skill 的 em_run；Stage 3 核准資料；tol 1e-8，max_iter 5000', '只檢驗初始化能否解釋差距。未核准、未登記；mclust 不參與正式估計')
+```
+
+```{r}
+#| label: tbl-mbinit
+#| tbl-cap: "mclust 階層分割接上 Skill EM，與 mclust 本身的結果（未採用的暫存區試算）"
+mb <- rd(EV('data/f9_mb_auto.csv')); mb <- mb[mb$tol == 1e-8 & mb$method == 'mbhc_svd', c('G', 'status', 'loglik')]; tt <- amc[grepl('tight', amc$setting) & amc$G > 1, c('G', 'loglik_mclust')]; mbx <- merge(mb, tt, by = 'G'); mbx$diff <- mbx$loglik - mbx$loglik_mclust; y <- mbx; y[, c('loglik', 'loglik_mclust')] <- lapply(y[, c('loglik', 'loglik_mclust')], round, 4); y$diff <- signif(y$diff, 2); tbl(y, col.names = c('G', '狀態', 'Skill EM（mclust 分割起點）', 'mclust VVV', '差'))
+```
+
+在 $G=2$ 到 $5$，兩者的最大絕對差為 `r fs(max(abs(mbx$diff)),2)`。這支持「差距主要來自初始化」，但只是這份資料上的試算。
+
+## F9 初始化試算（未採用） {#sec-auto-f9}
+
+```{r}
+#| output: asis
+src('scratch', 'tutorial/evidence/f9-initialization/（暫存區試算的副本，SHA-256 於渲染時驗證）', 'Stage 3 核准資料，G = 2–5，每法 1000 起點（Ward 為 1），seed 421 + s − 1，tol 1e-8，max_iter 5000，min_effective_n 5，max_cov_condition 1e10', '敏感度證據。未核准、未登記為 Candidate，不取代 Active Model 或正式報告；不能宣稱已找到最佳的非退化解')
+```
+
+```{r}
+#| label: tbl-f9same
+#| tbl-cap: "相同起點預算（1000）的比較，不含 Ward"
+x <- f9[f9$budget == 1000 & f9$method != 'ward' & f9$G > 2, c('G', 'method', 'valid', 'invalid_start', 'degenerate', 'best_loglik', 'hits_best_known', 'distinct_optima', 'BIC', 'AIC', 'min_Nk', 'max_cond', 'min_eig')]; x <- x[order(x$G), ]; tbl(x, col.names = c('G', '方法', '有效', '無效起點', '退化', '最佳 ℓ', '命中', '局部解', 'BIC', 'AIC', '最小 Nk', '最大條件數', '最小特徵值'))
+```
+
+```{r}
+#| label: tbl-f9budget
+#| tbl-cap: "起點預算對最佳 ℓ 與 BIC 選擇的影響（同一組種子的前 20、100、1000 起點）"
+mm <- c('kmeans', 'random', 'random-soft'); R <- do.call(rbind, lapply(mm, function(m) do.call(rbind, lapply(c(20, 100, 1000), function(b) { d <- f9[f9$method == m & f9$budget == b, ]; data.frame(method = m, budget = b, G3 = d$best_loglik[d$G == 3], G4 = d$best_loglik[d$G == 4], G5 = d$best_loglik[d$G == 5], BIC_G = d$G[which.min(d$BIC)], AIC_G = d$G[which.min(d$AIC)]) })))); tbl(R, col.names = c('方法', '起點數', 'G=3 ℓ', 'G=4 ℓ', 'G=5 ℓ', 'BIC 選', 'AIC 選'))
+```
+
+```{r}
+#| label: fig-f9g4
+#| fig-cap: "G = 4 每個有效起點的 log-likelihood（未採用的暫存區試算）。k-means 集中在少數解，隨機方法分散且偶爾更高。"
+#| fig-height: 3.6
+#| echo: true
+all <- do.call(rbind, lapply(c('kmeans', 'random', 'random-soft'), function(m) { d <- rd(EV(sprintf('data/f9a_auto_%s.csv', m))); d[d$G == 4 & d$status == 'CONVERGED_VALID', c('method', 'loglik')] }))
+op <- par(mar = c(4.3, 7, 1, 1)); set.seed(1); y <- match(all$method, c('kmeans', 'random', 'random-soft'))
+plot(all$loglik, y + runif(nrow(all), -.25, .25), pch = 16, cex = .45, col = adjustcolor(PAL[y], .45), yaxt = 'n', ylab = '', xlab = 'log-likelihood', ylim = c(.5, 3.5)); axis(2, 1:3, c('kmeans', 'random', 'random-soft'), las = 1); abline(v = c(g(aw, 4, 'loglik'), amc$loglik_mclust[amc$G == 4 & grepl('tight', amc$setting)]), lty = c(2, 3), col = 'grey30'); legend('topleft', c('原始 Stage 4', 'mclust'), lty = c(2, 3), bty = 'n', cex = .85); par(op)
+```
+
+**Ward 單一起點只作參考，不與上表比較：**
+
+```{r}
+x <- f9[f9$method == 'ward', c('G', 'best_loglik', 'BIC', 'AIC', 'min_Nk', 'max_cond', 'min_eig')]; tbl(x, col.names = c('G', 'ℓ', 'BIC', 'AIC', '最小 Nk', '最大條件數', '最小特徵值'))
+```
+
+從這些試算可以學到：
+
+1. **沒有方法全面勝出。** 1000 起點時 random-soft 在 $G=3,4,5$ 最高；但 20 起點時 $G=5$ 反而 k-means 最高。
+2. **最佳解很難碰到。** 最佳已知解最多只被命中幾次，不能宣稱已找到最佳的非退化解。
+3. **$G$ 的選擇會變。** 20 起點時隨機方法的 BIC 選 $G=4$，100、1000 起點時選 $G=5$。
+4. **較高的 likelihood 不等於較好。** 見下一節。
+
+### 數值上可疑但符合現行標準的解
+
+```{r}
+#| label: tbl-suspicious
+#| tbl-cap: "通過全部有效性檢查、但有窄成分的解（未採用的暫存區試算）"
+x <- f9[(f9$method != 'ward' & f9$budget %in% c(100, 1000) & f9$max_cond > 5000 & f9$G >= 4) | (f9$method == 'ward' & f9$G >= 3), c('method', 'G', 'budget', 'best_loglik', 'min_Nk', 'max_cond', 'min_eig')]; x <- x[order(x$G, x$method), ]; tbl(x, col.names = c('方法', 'G', '起點數', 'ℓ', '最小 Nk', '最大條件數', '最小特徵值'))
+```
+
+```{r}
+#| label: tbl-highcond
+#| tbl-cap: "全部有效起點中條件數最高的五個解（未採用的暫存區試算）"
+va <- do.call(rbind, lapply(c('kmeans', 'random', 'random-soft'), function(m) rd(EV(sprintf('data/f9a_auto_%s.csv', m))))); va <- va[va$status == 'CONVERGED_VALID', ]; hc <- va[order(-va$max_cov_condition)[1:5], c('method', 'G', 'start', 'loglik', 'min_effective_n', 'max_cov_condition', 'min_cov_eigenvalue')]; hc$loglik <- round(hc$loglik, 3); hc$min_effective_n <- round(hc$min_effective_n, 2); hc$max_cov_condition <- signif(hc$max_cov_condition, 4); hc$min_cov_eigenvalue <- formatC(hc$min_cov_eigenvalue, format = 'e', digits = 2); hc$max_cov_condition <- formatC(hc$max_cov_condition, format = 'e', digits = 3); tbl(hc, col.names = c('方法', 'G', '起點', 'ℓ', '最小 Nk', '最大條件數', '最小特徵值'))
+```
+
+上表說明，只看各方法的最佳解會低估搜尋過程的數值風險：`r format(nrow(va), big.mark = ',')` 個有效起點中，最大條件數達 `r fs(max(va$max_cov_condition),3)`，仍低於失效門檻，也沒有成為各 $G$ 的最佳解。
+
+作為對照，工作模型的最大條件數是 `r fx(g(as4,5,'max_cov_condition'),1)`。上表的解都低於失效門檻 $10^{10}$，所以 Skill 不會判定無效；但 @sec-unbounded 告訴我們，高 likelihood 可能只是因為有一個成分很窄。這類解應該連同成分大小與條件數一起判斷，由分析者決定。
+
+# 新版 Workflow 示範 {#sec-demo}
+
+```{r}
+#| output: asis
+src('demo', sprintf('tutorial/demo/（%s）；由 tutorial/R/run_demo.R 產生，渲染時不重跑', dinfo$run_root), 'Skill 內建 example_data/missing.csv（3 變數）；G = 1–4；k-means 20 starts；敏感度計畫 random-soft 20 starts、tol 1e-7', '所有核准都是教學用途的模擬，不是使用者的分析決定；與 Penguins、Automobile 無關，不修改任何正式 Active Model')
+```
+
+示範依序走過 `preview → import → new-run → Stage 1–6 → report`，再走 `sensitivity-plan`。下表是實際執行紀錄，刻意包含被拒絕與被阻擋的情境。
+
+```{r}
+#| label: tbl-demo
+#| tbl-cap: "示範的 27 個命令與 Outcome"
+x <- dlog[, c('step', 'label', 'outcome', 'exit_code', 'code')]; tbl(x, col.names = c('#', '步驟', 'Outcome', 'Exit', 'Code'))
+```
+
+```{r}
+t3 <- as.data.frame(table(dlog$outcome)); names(t3) <- c('Outcome', '次數'); tbl(t3)
+log_txt <- function(n) { f <- list.files('demo/logs', pattern = sprintf('^%02d-', n), full.names = TRUE); x <- readLines(f, encoding = 'UTF-8', warn = FALSE); cat('\n\n```text\n', paste(substr(x, 1, 150), collapse = '\n'), '\n```\n\n', sep = '') }
+```
+
+::: {.callout-note}
+## 教學核准與正式 Approval Reference 的差別
+示範的核准是模擬，不是分析決定。`new-run`、`sensitivity-run`、`sensitivity-close` 有 `--approval-ref` 欄位，紀錄中寫明 TUTORIAL DEMO ONLY。`stage2-handle` 與 `stage3` 的命令沒有這個欄位，所以 `workflow_state.json` 裡這兩筆只有核准項目；其中 Stage 3 的獨立性註記標明教學用途，Stage 2 的紀錄本身沒有。教學用途由 `demo_info.json` 與本節的來源框記錄。正式分析中，核准必須來自使用者在對話中的明確確認。
+:::
+
+## 代表性情境
+
+::: {.panel-tabset}
+
+### 等待核准：缺失選單
+
+```{r}
+#| output: asis
+log_txt(9)
+```
+
+KNN 發現有全部變數都缺失的列，於是暫停並列出，等使用者決定，什麼都不寫。
+
+### BLOCKED：回報觀測相依
+
+```{r}
+#| output: asis
+log_txt(12)
+```
+
+使用者回報資料有相依，S3-14 為 STOP。這是統計判斷，帶著 `--approved true` 也不會通過。
+
+### REFUSED：順序錯誤
+
+```{r}
+#| output: asis
+log_txt(6)
+```
+
+Stage 2 還沒做就要求 Stage 3，什麼都不執行。
+
+### ERROR：參數不合法
+
+```{r}
+#| output: asis
+log_txt(20)
+```
+
+`--init nope` 不是合法的初始化方法，是輸入錯誤，不是統計判斷。
+
+:::
+
+## 敏感度計畫與 Candidate
+
+```{r}
+#| output: asis
+log_txt(21)
+```
+
+核准後的擬合產生 Candidate `r dinfo$candidate_model`。執行前後 Active Model 都是 `r dinfo$active_model_after_sensitivity`，因為示範選擇 `keep-active`，沒有呼叫 `activate-model`。
+
+# Part V — Limitations, Development History and References {.unnumbered}
+
+# 統計與實作限制 {#sec-limits}
+
+**統計限制**
+
+- 未受約束 GMM 一般不存在全域最大概似解；多起點只能增加找到較佳非退化解的機會。
+- 高 likelihood 可能來自窄成分，見 @sec-unbounded。
+- BIC 在混合模型上缺乏完整理論基礎，邊界解不會自動擴大搜尋。
+- Gaussian 成分不一定是自然群組；posterior 不等於分類準確率。
+- 單一插補不反映不確定性；缺失機制無法由資料證明。
+- 觀測獨立性無法由資料證明，兩個案例都是 working assumption。
+
+**尚未實作，本文沒有當作已具備**：bootstrap／subsampling、split-sample 驗證、missing-data EM、multiple imputation、其他 covariance family、covariance regularization、Bayesian GMM。
+
+**待審的專案門檻。** `references/pending-heuristics.md` 列出 `r n_hz` 項，全部 PENDING REVIEW，例如 $p+1$、$10^{10}$、$\Delta\mathrm{BIC}\le6$、$U>0.10$、Dirichlet(1,…,1)。它們都不是教科書規則，改動需要核准並重跑相關階段。
+
+**Automobile 的現況**：`workflow_state.json` 建立於模型登記機制之前，只能讀取，未遷移。
+
+# 開發歷程：F1–F13 驗收 {#sec-history}
+
+開發採「一次一個發現、先設計再實作、每一步等待確認」的節奏，紀錄在 `results/automobile/acceptance_log.md`。全部項目已由使用者確認。
+
+| 項目 | 問題 | 結果 |
+|---|---|---|
+| F1–F3 | 匯入、唯讀預覽、分析資料夾 | `data_import.R`、`new-run`、`runs` |
+| F4 | KNN donor 無法追蹤 | 每次 KNN 寫出稽核檔 |
+| F5–F6 | 限制無法帶到報告 | `warnings_registry.R`，部分修正 |
+| F7 | 狀態碼語意混淆 | Outcome Contract（@sec-outcome） |
+| F8、F12 | `tol = 1e-6` 可能過早停止 | `confirm_stage4.R` 診斷，預設不變 |
+| F9 | 初始化影響 $G=4$ 的解 | random-soft、Ward 與計畫參數 |
+| F10 | 沒有敏感度流程 | `sensitivity_workflow.R` |
+| F11 | 模型無法交接 | 模型登記與 `activate-model` |
+| F13 | Stage 6 報告有資料集專用文字 | 依分析狀態產生文字 |
+
+# 已完成驗收與尚存限制 {#sec-pending}
+
+本章把四件不同的事分開：
+
+- **A. 程式測試與驗收**：程式是否照設計執行；
+- **B. 文獻核對**：文字是否有原文支持；
+- **C. 經驗門檻**：專案自訂的數值與它們的限制；
+- **D. 規格差異**：程式行為與規格文件是否一致。
+
+**測試通過不等於學術內容已全部核准。** A 通過，不代表 B、C、D 已完成。
+
+## A. 已完成的程式測試與驗收
+
+| 項目 | 結果 | 紀錄 |
+|---|---|---|
+| F1–F13 開發發現 | 全部已實作並由使用者確認 | @sec-history |
+| Windows 回歸測試（R 4.5.1） | rc4：完整回歸測試 863 / 863 通過；中文報告測試 T-2 至 T-9 共 99 / 99 通過；SHA-256 與環境檢查 58 / 58 通過 | `release-notes/RC4_ACCEPTANCE.md` |
+| Cowork 實機執行（R 4.3.3） | rc3 完成一次 Penguins Stage 1–6 與報告產生（依使用者在 Cowork 的實測回報，2026-11-11） | `release-notes/RC3_ACCEPTANCE.md` |
+
+**尚未完成的程式驗收：**
+
+- rc4 ZIP 在 Cowork 的正式實機驗收：R1–R9、繁體中文報告、中文 description 的上傳與觸發。
+- 在完成之前，rc4 仍是驗收候選版（Candidate）。
+
+## B. 文獻核對狀態
+
+**Hair 第 4 章：已對照原書（2026-11-12）。** 依據是第 8 版的封面、書名頁與版權頁：
+- 作者順序：Hair, Black, Babin, Anderson；
+- 出版：Cengage Learning EMEA；
+- 版權年 2019（印刷年 2018）；
+- ISBN 978-1-4737-5654-0。
+
+核對結果：
+- 第 4 章（印刷頁 pp. 189–256）支持 @sec-sources 表中第一列的各項概念。
+- 三份專案文件引用的頁碼都正確。
+- 有兩處說法沒有原文支持，已修正：
+  - 「避免任意命名」不再歸因於原書；
+  - 「M-step 公式與原書一致」已刪除。
+- 本 Skill 與原書刻意不同的地方，見 @sec-sources。
+
+**尚未完成的文獻核對：** 除 Hair 外，其他文獻的原文本次都沒有取得，下表的內容支持狀態維持不變。
+
+**文獻查核狀態（2026-11-10）。** 書目依 Crossref、DataCite 或官方頁面核對。
+
+| 文獻 | 書目 | 內容支持 |
+|---|---|---|
+| Strehl & Ghosh 2002 | 已核對 | **已讀原文** §2.2：提到兩種正規化，採幾何平均 |
+| Vinh et al. 2010 | 已核對 | **已讀原文** Table 2：NMIsum、NMIsqrt |
+| Dempster et al. 1977 | 已核對，研究文章 pp. 1–22；其他資料庫的 1–38 可能包含 Discussion | 僅作為 EM 架構來源；內文 UNVERIFIED |
+| Seaman et al. 2013 | 已核對 | 由開放摘要與次級描述確認 realised／everywhere 區分 |
+| Kass & Raftery 1995 | 已核對 | 尺度僅由次級來源確認；原文 UNVERIFIED |
+| Wu 1983、Hubert & Arabie 1985、Akaike 1974、Schwarz 1978、Rubin 1976 | 已核對 | 內文 UNVERIFIED |
+| McLachlan & Peel 2000、Little & Rubin 2019、Fraley & Raftery 2002 | 已核對 | 內文 UNVERIFIED，僅作延伸閱讀或定義來源 |
+| Scrucca et al. 2016 | 已核對：The R Journal 8(1), pp. 289–317 | 軟體來源 |
+| Gorman et al. 2014、Horst et al. 2020、Schlimmer 1985 | 已核對 | 資料來源 |
+
+## C. `r n_hz` 項經驗門檻及其限制
+
+`references/pending-heuristics.md` 與每份報告的附錄 A 列出 `r n_hz` 項專案自訂門檻，例如 $p+1$、$10^{10}$、$\Delta\mathrm{BIC}\le6$、$U>0.10$、Dirichlet(1,…,1)。
+
+- **全部仍是 PENDING REVIEW**，不是教科書規則。
+- 改動任何一項都需要核准，並重跑相關階段。
+- 對照 Hair 原書的結果：
+  - 少數門檻在其他章節有相近的建議，但情境不同。VIF 10 與條件指數 30 出自迴歸章節（pp. 313–320）；離群值的標準分數範圍 2.5–4 與 Mahalanobis 篩檢的 .001 水準出自第 2 章（p. 90）。
+  - 偏態 2、峰度 7、每成分每參數 5 列、\|r\| 0.9 在原書中沒有對應數值。
+
+## D. 已知規格差異 S-1 至 S-6
+
+下列 S-1 到 S-6 是對照程式時記下的規格差異。它們是**待核對清單**，不是已確認的程式錯誤：
+
+- 每一項都要再對照程式與測試紀錄確認；
+- 是否修正、如何修正，尚未決定；
+- rc4 沒有處理任何一項。
+
+詳細位置與影響見 `release-notes/SPEC_ISSUES.md`。
+
+| ID | 內容 |
+|---|---|
+| S-1 | 附錄 A 登錄 `sd_ratio_scale = 10`，但程式沒有讀取；S3-06 實際使用寫死的 > 100 |
+| S-2 | 兩個分割都是每列各自一類時，ARI 為 0，NMI 為 1 |
+| S-3 | 外部標籤全部缺失（`n_used = 0`）時：指標函式回傳 ARI = NaN、NMI = 1；經 workflow 執行時，Stage 6 以 `EXECUTION_ERROR` 停止 |
+| S-4 | S3-05 訊息中的 \|r\| > 0.90 是寫死的文字，沒有讀取 `abs_r` |
+| S-5 | EDA 與 Stage 3 的共線性門檻是兩組獨立常數，目前數值相同 |
+| S-6 | 報告的「Regression tests」一行指向發佈版沒有的 tests 路徑 |
+
+另外還有先前審查的 16 項規格差異，尚未決定處理批次。
+
+**過時的 references 文件（本次依指示未修改）**
+
+| 檔案 | 問題 |
+|---|---|
+| `references/decision-tree.md` | 第 13、98 行仍寫 Stage 4–6 為規格或未實作 |
+| `references/workflow-handoff.md` | 第 25 行仍寫 Stage 4–6 為規劃中 |
+| `references/stage-contract.md` | 第 5 行仍寫 Stage 4–6 為未來契約 |
+| `references/missing-data-menu.md` | 第 51 行仍提到 v0.3 不能擬合 |
+| `references/stage4-em-math.md` | 第 85–90 行未含 random-soft、Ward，且把 `random` 寫成 uniformly random；實作是平衡後打亂 |
+
+# 公式與 R 函式對照 {#sec-mapping}
+
+| 主題 | 公式 | 檔案 | 函式 |
+|---|---|---|---|
+| MVN log-density | @eq-logmvn、@eq-chol | `em_stage4.R` | `em_logdens` |
+| log-sum-exp、E-step | @eq-logsumexp、@eq-estep | `em_stage4.R` | `em_estep` |
+| Observed log-likelihood | @eq-observed | `em_stage4.R` | `em_estep`；驗算 `em_loglik_reference` |
+| M-step | @eq-mstep | `em_stage4.R` | `em_mstep` |
+| 收斂與單調性 | @eq-stop、@eq-monotone | `em_stage4.R` | `em_run`、`em_ll_change` |
+| 有效性 | 條件數、$N_i$ | `em_stage4.R` | `em_check`、`em_cov_conditions`、`em_cov_min_eigen` |
+| 初始化 | Dirichlet、Ward | `em_stage4.R` | `em_init`、`em_init_soft_tau`、`em_init_ward_cl` |
+| 多起點 | seed 排程 | `em_stage4.R` | `em_fit_gmm`、`with_seed` |
+| Label 對齊 | 排列搜尋 | `em_stage4.R`、`select_stage4.R` | `em_reorder`、`s4_align`、`s4_par_diff` |
+| $k_G$、AIC、BIC | @eq-kg、@eq-ic | `select_stage4.R` | `s4_select` |
+| 局部解 | 相對差、參數差 | `select_stage4.R` | `s4_start_diagnostics` |
+| 收斂確認 | 續跑 | `confirm_stage4.R` | `confirm_one`、`confirm_starts` |
+| MAP、$U_j$、$\widetilde H_j$ | @eq-uncertainty | `interpret_stage5.R` | `s5_uncertainty` |
+| 尺度還原 | @eq-back | `interpret_stage5.R` | `stage5_interpret` |
+| ARI | @eq-ari | `validate_stage6.R` | `s6_ari` |
+| NMI（算術平均） | @eq-mi、@eq-nmi | `validate_stage6.R` | `s6_nmi` |
+| Q 與下界 | @eq-qbound | `em_stage4.R` | 概念；由 `em_estep`、`em_mstep` 實現 |
+| G 之間的指標 | @eq-split | `validate_stage6.R` | `s6_split_analysis` |
+| Matched agreement | 最佳配對 | `validate_stage6.R` | `s6_matched_agreement` |
+| G 之間的結構 | SPLIT、MIXED、KEPT | `validate_stage6.R` | `s6_split_analysis` |
+| 分割穩定性 | ARI | `validate_stage6.R` | `s6_partition_stability`、`stage6_replay` |
+| KNN | @sec-missing | `data_stage2.R`、`knn_audit.R` | `knn_impute` |
+| Stage 3 檢查 | S3-01 至 15 | `feasibility_stage3.R` | `feasibility` |
+
+**符號表**
+
+| 符號 | 意義 | 程式 |
+|---|---|---|
+| $n,p,G$ | 列數、變數數、成分數 | `n`, `p`, `G` |
+| $\pi_i,\mu_i,\Sigma_i$ | 混合比例、平均、共變異 | `pi[i]`, `mu[i,]`, `Sigma[[i]]` |
+| $\tau_{ji}$ | posterior responsibility | `tau[j,i]` |
+| $N_i$ | 有效樣本數 | `Nk[i]` |
+| $k_G$ | 自由參數數 | `k_G` |
+| $R_i$ | 共變異的 Cholesky 因子 $\Sigma_i=R_i^\top R_i$ | `R` in `em_logdens` |
+| $C$ | 相關矩陣 | `r` in `feasibility` |
+| $M$ | 缺失指標矩陣 | `is.na` |
+| $\widetilde H_j$ | 第 $j$ 列的正規化 entropy | `entropy_normalized` |
+| $H(U)$ | 分割 $U$ 的未正規化 entropy | `s6_entropy` |
+| $n_{rs},a_r,b_s$ | 兩個分割的列聯次數與邊際和 | `table(a, b)` |
+| $c,S$ | z-score 的中心與尺度 | `center`, `scale` |
+
+# 參考文獻 {.unnumbered}
+
+::: {#refs}
+:::

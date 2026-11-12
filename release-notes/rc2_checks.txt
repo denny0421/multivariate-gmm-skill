@@ -1,0 +1,51 @@
+== 1. SKILL.md syntax and frontmatter
+PASS frontmatter opens on line 1 and closes on line 4
+PASS only name and description keys: name, description
+PASS name "multivariate-gmm": lowercase letters, digits, hyphens, <= 64, equals the folder name
+PASS description length 272 (<= 1024; the Help Center figure of 200 is not met, as in rc1, whose upload worked)
+PASS SKILL.md 468 lines (< 500 recommended)
+PASS code fences balanced (14)
+PASS every Markdown table has the same number of columns in each row
+PASS all 28 referenced references/, scripts/, example_data/ files exist
+PASS contains: Guiding the user (one decision at a time)
+PASS contains: Ask only the decision needed now
+PASS contains: Never decide for the user
+PASS contains: Do not call them buttons
+PASS contains: Record each decision
+PASS contains: Show a command only if the user asks
+PASS contains: Exit 0 (SUCCESS)
+PASS contains: A warning never skips or shortens an approval
+PASS contains: compare another G
+PASS contains: `new-run` (or `init`)
+PASS contains: in this order: scaling, then row independence, then the G range
+PASS gate table: 11 rows; only the init row changed (| `init` | objective, features / | `new-run` (or `init`) | obje)
+== 2-3. ZIP structure and SHA-256 equality with the public sources
+PASS 37 entries, single top folder multivariate-gmm/
+PASS required files present (SKILL.md, scripts/workflow.R, scripts/data_import.R, scripts/hash_utils.R, scripts/check_env.R, references/decision-tree.md, references/stage-contract.md, references/missing-data-menu.md)
+PASS no tests/, results/, .rds, workflow_state.json or hidden files in the ZIP
+PASS ZIP, github skill/ and release/cowork-r43 have the same 37 file names
+PASS every file byte-identical (SHA-256) in ZIP, github skill/ and release/cowork-r43
+PASS release_manifest.csv agrees with the ZIP for every release file
+PASS manifest sha256_original equals the approved Skill today (approved Skill unchanged)
+PASS rc1 -> rc2: only SKILL.md changed (changed: SKILL.md)
+== 5. local links in all Markdown and HTML files
+PASS 19 local links checked in 32 files; broken: 0
+== 6. QMD and HTML consistency (public copies)
+PASS presentation/gmm-skill-presentation.qmd: 25 QMD headings (level 1-2) all appear as <h1>/<h2> in the HTML
+PASS gmm-skill-presentation.qmd: 2 callout titles all appear in the HTML
+PASS gmm-skill-presentation.qmd: local .html links in QMD (3) and HTML (3) point to the same targets
+PASS docs/full-tutorial/gmm-skill-tutorial.qmd: 73 QMD headings (level 1-2) all appear as <h1>/<h2> in the HTML
+PASS gmm-skill-tutorial.qmd: 13 callout titles all appear in the HTML
+PASS gmm-skill-tutorial.qmd: local .html links in QMD (0) and HTML (0) point to the same targets
+PASS presentation copies differ from the approved tutorial/ files only in the 3 replaced link lines each
+PASS full tutorial copies byte-identical to tutorial/
+== 7. protected files
+PASS tutorial/ approved files unchanged (presentation qmd a342ec34, html 4eaaf6af, notes 9018573b; tutorial qmd 86f86375, html 9299c499)
+PASS release/cowork (first release) ZIP unchanged (8013e493)
+PASS rc1 ZIP kept as baseline (6222f5eb)
+PASS .claude/skills/multivariate-gmm: newest file write 2026-11-09 23:30:50 (before 2026-11-10 12:00)
+PASS results: newest file write 2026-11-09 23:49:20 (before 2026-11-10 12:00)
+PASS data: newest file write 2026-11-08 16:17:56 (before 2026-11-10 12:00)
+PASS config: newest file write 2026-11-08 19:32:50 (before 2026-11-10 12:00)
+
+PUBLIC_FILES.csv: 60 files. Checks: 44 passed, 0 failed.

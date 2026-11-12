@@ -1,0 +1,58 @@
+== 1. Skill: rc4 doc fix
+PASS skill/ has the same 38 files as rc4
+PASS changed vs rc4 (text only): references/decision-tree.md, references/stage4-em-math.md, references/stage5-interpretation.md, SKILL.md
+PASS all 17 R scripts byte-identical to rc4
+PASS example_data identical to rc4
+PASS pending-heuristics.md (41 thresholds, PENDING REVIEW) unchanged
+  references/decision-tree.md            +1 -1 lines
+  references/stage4-em-math.md           +1 -1 lines
+  references/stage5-interpretation.md    +1 -1 lines
+  SKILL.md                               +1 -1 lines
+== 2. ZIP integrity
+PASS 38 entries, single top folder multivariate-gmm/
+PASS ZIP and skill/ byte-identical file by file
+  ZIP SHA-256 9437eb63dd3541d413c5197612314821576336cc2784c0d765f10ece5c1dddf2
+PASS original rc4 ZIP in cowork-r43 kept (7cb13d8b)
+== 3. Full tutorial
+PASS QMD YAML has no author, date or date-format
+PASS HTML has no author placeholder, author meta or publish date
+PASS HTML valid UTF-8, no replacement characters
+PASS QMD and HTML both contain: 已完成驗收與尚存限制
+PASS QMD and HTML both contain: A. 已完成的程式測試與驗收
+PASS QMD and HTML both contain: B. 文獻核對狀態
+PASS QMD and HTML both contain: 項經驗門檻及其限制
+PASS QMD and HTML both contain: D. 已知規格差異 S-1 至 S-6
+PASS QMD and HTML both contain: Skill 與 Hair 的關係：參考並延伸，不是完全相同
+PASS HTML shows 41 thresholds heading (inline R evaluated)
+PASS no new APPROVED wording vs original HTML (21 vs 21: CLI flag --approved, CSS class, folder names); PENDING REVIEW 2 (original 1)
+PASS UNVERIFIED markers kept (10, same as tutorial/ original)
+PASS removed claims: avoiding arbitrary naming / agree with Hair
+PASS bibliography: author order Hair, Black, Babin, Anderson; 2019; Cengage Learning EMEA
+PASS 78 TOC targets, all exist as ids
+PASS body years kept vs tutorial/ original (only change: none)
+== 4. Public folder content and privacy
+PASS required files and folders present
+PASS presentation/ excluded
+PASS presentation originals and public-copy backup kept outside the repo root
+PASS no PDF in the public folder (no source book)
+PASS no results/, config/, data/, workflow state or R session files
+PASS no tests/ folder in skill/
+PASS privacy local_path: no hits
+PASS privacy user: no hits
+PASS privacy scratch: no hits
+PASS privacy key: 5 AKIA-like strings in HTML are embedded font data identical to the approved original HTML (no new hits)
+== 5. Protected files
+PASS tutorial/ original full tutorial unchanged (86f86375 / 9299c499)
+PASS approved presentation unchanged (a342ec34 / 4eaaf6af)
+PASS original Skill untouched (newest write 2026-11-09 23:30:50)
+PASS results/ untouched (newest write 2026-11-09 23:49:20)
+PASS data/ untouched (newest write 2026-11-08 16:17:56)
+PASS config/ untouched (newest write 2026-11-08 19:32:50)
+PASS cowork-r43/previous/rc1 untouched
+PASS cowork-r43/previous/rc2 untouched
+PASS cowork-r43/previous/rc3 untouched
+== 6. Windows regression (R 4.5.1)
+  ok lines 853, not ok 0, exit 1; minutes 10.7
+FAIL full regression completed with exit 0 and no failures
+PUBLIC_FILES.csv: 73 files (excluding itself and final_release_checks.txt)
+Checks: 43 passed, 1 failed.

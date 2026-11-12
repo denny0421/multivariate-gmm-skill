@@ -1,0 +1,62 @@
+# Proposal SKILL-interaction-v1 for release/cowork-r43/multivariate-gmm/SKILL.md - NOT APPLIED, awaiting approval.
+# Current 427 lines, proposed 467 lines. Only SKILL.md would change; scripts, thresholds, gates and the decision tree are untouched.
+# Current SHA-256 7dcd5bdd9fa0338a076422ee4080aeb81ecdd0e25400064e5fee90dd0f899533; proposed SHA-256 4001d2bfd8107b9c88c824079fa215c4be8f40df0e234fd12119f0b7648cb07f.
+
+--- a/SKILL.md (release/cowork-r43, current)
++++ b/SKILL.md (proposed, NOT applied)
+@@ -45,6 +45,46 @@
+    Then run `check_env.R` again. If installation or the check fails, stop and show the full error. Never change network allowlists or security settings, never add third-party package sources, never switch to Python or another tool, and never write your own statistical code instead.
+ 5. **Run the analysis** with the standard path below: `preview → import → new-run`, then Stages 2–6 with `workflow.R`. Stop at every gate exactly as described in this file; `--approved true` is passed only after the user's explicit approval in the conversation.
+ 
++## Guiding the user (one decision at a time)
++Assume the user does not know GMM, EM or BIC, and reply in the user's language. These rules change only how you talk; every gate, threshold and refusal in this file stays as it is.
++- **Ask only the decision needed now.** Settings of the same step may be asked together as one short numbered list. Never list later stages' parameters in advance.
++- **One or two plain sentences per option:** what it does and what it costs. Explain a term the first time it is needed (see the terms below).
++- **Options are a numbered text list**; the user may answer with the number or in words. Do not call them buttons. If the app offers a question tool you may use it, but the text must stand on its own.
++- **Never decide for the user** the missing-data method, k, scaling, the independence answer, the G range, a model switch or a replay. Show a recommendation only when a script printed one (for example S3-06 recommends z-score), and say it is the program's recommendation. If the user says "you decide", restate the trade-off and ask again.
++- **Record each decision.** Restate it in one line (for example "Recorded: complete-case."). Pass the user's own words to `--approval-ref` or `--independence-note` where the command takes them. Then run the next command yourself.
++- **Run every command yourself**; report a few key numbers, the warnings and the folder written, in plain language. Show a command only if the user asks.
++- **Outcomes.**
++  - Exit 2 (AWAITING_USER_APPROVAL): ask the question it names.
++  - Exit 3 (BLOCKED): explain why the data cannot be analysed this way, and offer only the options it lists.
++  - Exit 4 (REFUSED): say which earlier step or approval is missing.
++  - Exit 1 (ERROR): show the error and stop.
++
++Decision points, in order:
++
++| # | When | Ask | Options | Then |
++|---|---|---|---|---|
++| 1 | R or jsonlite missing | permission to install | install from the official Ubuntu sources / do not install (stop) | apt, `check_env.R` |
++| 2 | after `preview` | file format | header, separator, encoding, missing-value markers as seen in the preview: confirm or correct | `import` |
++| 3 | after `import` | the goal | clustering (look for subgroups) / density (describe the shape of the data) | — |
++| 4 | — | variables and roles | the numeric columns to model; the column of known groups kept for the end, if any | `new-run` (propose a short analysis name from the file name) |
++| 5 | `stage2` exit 2 | missing values | the five methods of the missing-data menu (step 4 below); KNN also needs k | `stage2-handle` |
++| 6 | after `stage2-handle` | go on to Stage 3 | continue / look at the processed data first | `stage3` (check) |
++| 7 | `stage3` exit 2 | scaling, row independence, G range | z-score / original units; independent / working assumption plus a short note / not independent (BLOCKED); G 1–5 or another range | `stage3 ... --approved true` |
++| 8 | after `stage4` | accept the BIC choice | continue / show the details / plan a sensitivity analysis (its own approval) | `stage5` |
++| 9 | after `stage5` | go on to validation | continue / review | — |
++| 10 | before `stage6` | compare another G | the alternative Stage 4 named (for example the AIC choice) / none | `stage6 [--compare-g]` |
++| 11 | after `stage6` | optional replay | run it (settings shown) / skip | `stage6-replay`, `stage6` |
++| 12 | — | report | — | `report`; give the full path of `report/final_report.md` and list the other files |
++
++Terms, one sentence each:
++- **GMM:** describes the data as a mixture of several bell-shaped (normal) groups, each with its own centre, spread and share.
++- **EM:** estimates those groups by repeated small improvements; different starting points can end at different answers.
++- **BIC / AIC:** scores that balance fit against complexity; smaller is better, and BIC prefers simpler models.
++- **Posterior probability:** how strongly the model assigns a row to each group; not proof of the true group.
++- **Standardisation (z-score):** puts variables on one scale so that a variable with large units does not dominate.
++- **Independent rows:** each row is a separate unit, not a repeated measurement of the same one.
++- **ARI:** agreement between the model's groups and known groups, checked only after fitting (1 = identical, about 0 = chance).
++
+ ## Importing data and starting an analysis (standard path for new data)
+ Do these before any workflow exists: `preview → import → new-run`. `D="$S/scripts/data_import.R"` and `W="$S/scripts/workflow.R"`, with `S` from "Getting started".
+ 
+@@ -95,7 +135,7 @@
+ 
+ | After | Present to the user | Proceed only when |
+ |---|---|---|
++| `new-run` (or `init`) | objective, features, ID and label roles (Stage 1) | the user confirms them |
+-| `init` | objective, features, ID and label roles (Stage 1) | the user confirms them |
+ | `stage2` | EDA and missingness (steps 2–3 below) | no missing values → user confirms Stage 2; missing values → the user picks from the menu (step 4) |
+ | `stage2-handle` | the processed-data summary; or the KNN PAUSE menu (exit code 2) | the user approves the method (`--approved true`); **diagnostics-only ends the workflow**: write the report and stop |
+ | `stage3` (first run) | the checks and outstanding decisions (scale: z-score recommended but not forced; independence; G) | the user decides and approves → rerun with the decisions and `--approved true` |

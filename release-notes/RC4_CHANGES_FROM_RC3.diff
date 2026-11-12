@@ -1,0 +1,695 @@
+Unified diff rc3 -> rc4 (release/cowork-r43). Only files that differ are shown.
+
+--- a/scripts/check_env.R (rc3)
++++ b/scripts/check_env.R (rc4)
+@@ -24,6 +24,9 @@
+ sha <- tryCatch({ source(file.path(ce_dir, 'hash_utils.R'), local = TRUE); b <- skill_sha256_selftest(); list(ok = TRUE, msg = sprintf('known answers pass (%s)', if (identical(b, 'tools')) 'tools::sha256sum' else paste(skill_sha256_backend()$command, collapse = ' '))) },
+                 error = function(e) list(ok = FALSE, msg = conditionMessage(e)))
+ add('SHA-256', sha$ok, sha$msg, 'ENV_SHA256_UNAVAILABLE')
++utf8 <- isTRUE(l10n_info()[['UTF-8']])
++res[[length(res) + 1L]] <- sprintf('%-9s INFO  LC_CTYPE = %s; UTF-8 locale: %s%s', 'Locale', Sys.getlocale('LC_CTYPE'), if (utf8) 'yes' else 'no',
++                                  if (utf8) '' else ' (reports are still written as UTF-8 files; if Chinese text looks wrong, run Rscript with LC_ALL=C.UTF-8)')
+ cat(unlist(res), sep = '\n')
+ cat(sprintf('Outcome: %s\nExit-Code: %d\nStage: environment\nCode: %s\nNext-Action: %s\n', if (ok) 'SUCCESS' else 'ERROR', if (ok) 0L else 1L, code,
+             if (ok) 'Start with data_import.R preview.' else 'Stop and show this to the user. Do not continue the analysis and do not compute anything by other means.'))
+
+--- a/scripts/report_final.R (rc3)
++++ b/scripts/report_final.R (rc4)
+@@ -17,8 +17,9 @@
+ if (!exists('CONFIRM_THRESHOLDS', inherits = TRUE)) source(file.path(RP_SCRIPT_DIR, 'confirm_stage4.R'), local = TRUE)
+ if (!exists('wr_report_section', inherits = TRUE)) source(file.path(RP_SCRIPT_DIR, 'warnings_registry.R'), local = TRUE)
+ if (!exists('skill_sha256', inherits = TRUE)) source(file.path(RP_SCRIPT_DIR, 'hash_utils.R'), local = TRUE) # Cowork release: SHA-256 on R >= 4.1
++if (!exists('rp_zh_report', inherits = TRUE)) source(file.path(RP_SCRIPT_DIR, 'report_text.R'), local = TRUE, encoding = 'UTF-8') # rc4: zh-TW report text
+ RP_VERSION <- '0.1.0'
++RP_SCRIPTS <- c('data_stage2.R', 'eda_stage2.R', 'feasibility_stage3.R', 'em_stage4.R', 'select_stage4.R', 'confirm_stage4.R', 'warnings_registry.R', 'interpret_stage5.R', 'validate_stage6.R', 'report_final.R', 'workflow.R', 'hash_utils.R', 'report_text.R')
+-RP_SCRIPTS <- c('data_stage2.R', 'eda_stage2.R', 'feasibility_stage3.R', 'em_stage4.R', 'select_stage4.R', 'confirm_stage4.R', 'warnings_registry.R', 'interpret_stage5.R', 'validate_stage6.R', 'report_final.R', 'workflow.R', 'hash_utils.R')
+ 
+ # ---------------------------------------------------------------- heuristic threshold registry (single source for the pending list)
+ gmm_heuristics_registry <- function() {
+@@ -78,7 +79,8 @@
+ }
+ 
+ # ---------------------------------------------------------------- main
++final_report <- function(manifest, output, lang = 'en') {
++  if (!identical(length(lang), 1L) || !lang %in% RP_LANGS) fail('Report language must be one of: ', paste(RP_LANGS, collapse = ', '), '.')
+-final_report <- function(manifest, output) {
+   m <- manifest
+   output_path <- resolve_path(output)
+   if (path_within(output_path, STAGE2_SKILL_ROOT)) fail('Output path is inside the Skill directory.')
+@@ -300,12 +302,14 @@
+     L <- c(L, '', '## Appendix B. Data source record', '', paste('>', readLines(resolve_path(m$data_source), warn = FALSE, encoding = 'UTF-8')))
+   }
+   L <- enc2utf8(unlist(L))
++  # rc4: the English text above is unchanged; zh-TW is written from the same objects already read (nothing re-read or re-estimated).
++  if (identical(lang, 'zh-TW')) L <- rp_zh_report(environment())
+ 
+   writer <- function(dir) {
+     if (length(figs)) { dir.create(file.path(dir, 'figures')); for (nm in names(figs)) file.copy(figs[[nm]], file.path(dir, 'figures', nm)) }
+     writeLines(L, file.path(dir, 'final_report.md'), useBytes = TRUE)
+     u <- unique(c(used, unlist(m$active_model_files)))
++    write_json_file(list(report_version = RP_VERSION, report_language = lang, generated_utc = format(Sys.time(), '%Y-%m-%dT%H:%M:%SZ', tz = 'UTC'), active_model_id = m$active_model_id, manifest = m,
+-    write_json_file(list(report_version = RP_VERSION, generated_utc = format(Sys.time(), '%Y-%m-%dT%H:%M:%SZ', tz = 'UTC'), active_model_id = m$active_model_id, manifest = m,
+                          sources = data.frame(file = u, md5 = unname(tools::md5sum(u)), sha256 = unname(skill_sha256(u))), figures = data.frame(copy = names(figs), source = unlist(figs, use.names = FALSE)),
+                          re_estimation = FALSE), file.path(dir, 'report_manifest.json'))
+     write.csv(hz, file.path(dir, 'pending_heuristics.csv'), row.names = FALSE)
+@@ -320,10 +324,10 @@
+ rp_cli <- function(argv) {
+   if (length(argv) %% 2L) fail('Arguments must use --key value pairs.')
+   a <- list(); for (i in seq(1L, length(argv), 2L)) a[[sub('^--', '', argv[i])]] <- argv[i + 1L]
++  if (is.null(a$manifest) || is.null(a$output)) fail('Usage: report_final.R --manifest <manifest.json> --output <new dir> [--lang en|zh-TW]')
+-  if (is.null(a$manifest) || is.null(a$output)) fail('Usage: report_final.R --manifest <manifest.json> --output <new dir>')
+   man <- jsonlite::fromJSON(resolve_path(a$manifest), simplifyVector = TRUE)
+   man$config_files <- unique(c(man$config_files, resolve_path(a$manifest)))
++  final_report(man, a$output, lang = if (is.null(a$lang)) 'en' else a$lang)
+-  final_report(man, a$output)
+ }
+ 
+ if (sys.nframe() == 0L) {
+
+--- a/scripts/workflow.R (rc3)
++++ b/scripts/workflow.R (rc4)
+@@ -447,7 +447,8 @@
+   list(status = 'OK', message = paste(c('', rows), collapse = '\n'), next_action = wf_next(st))
+ }
+ 
++wf_report <- function(root, title = NULL, lang = 'en') {
++  if (!identical(length(lang), 1L) || !lang %in% RP_LANGS) fail('--lang must be one of: ', paste(RP_LANGS, collapse = ', '), '.')
+-wf_report <- function(root, title = NULL) {
+   st <- wf_read(root)
+   wf_require(!is.null(st$stages$stage2), 'A report needs at least the Stage 2 diagnostics.')
+   m <- NULL
+@@ -458,8 +459,9 @@
+     if (!is.null(m$stage5) && is.null(m$stage6) && has('stage6')) fail(sprintf('Active model %s has no Stage 6 results (another model does). Run stage6 for it first; outputs of different models are never mixed.', m$model_id))
+   }
+   out <- wf_new_dir(st$root, 'report')
++  r <- final_report(wf_manifest(st, title), out, lang = lang)
+-  r <- final_report(wf_manifest(st, title), out)
+   st$stages$report <- c(st$stages$report, out); if (identical(st$status, 'active') && !is.null(m$stage6)) st$status <- 'complete'
++  st$stages$report_lang <- c(unlist(st$stages$report_lang), lang) # rc4: report language only; analysis records are unchanged
+   st <- wf_log(st, 'report', out); wf_write(st)
+   list(status = 'DONE', message = sprintf('Report with %d sections and %d figures.', length(r$sections), r$n_figures), next_action = wf_next(st), output = out)
+ }
+@@ -487,7 +489,7 @@
+                   stage3 = c('root', 'g', 'scale', 'rows-independent', 'independence-note', 'approved'),
+                   stage4 = c('root', 'n-starts', 'seed', 'tol', 'max-iter', 'init'), stage5 = c('root', 'ambiguity-threshold'),
+                   `register-model` = c('root', 'stage4-dir'), `activate-model` = c('root', 'model-id', 'approved'), models = 'root', cancel = c('root', 'reason', 'approved'),
++                  stage6 = c('root', 'compare-g', 'strata', 'strata-columns'), `stage6-replay` = c('root', 'g', 'approved'), report = c('root', 'title', 'lang'), status = 'root',
+-                  stage6 = c('root', 'compare-g', 'strata', 'strata-columns'), `stage6-replay` = c('root', 'g', 'approved'), report = c('root', 'title'), status = 'root',
+                   `sensitivity-status` = 'root', `confirm-convergence` = c('root', 'model-id', 'approved'), `sensitivity-plan` = c('root', 'n-starts', 'tol', 'max-iter', 'seed', 'g', 'init'),
+                   `sensitivity-run` = c('root', 'plan', 'approval-ref', 'approved'), `sensitivity-close` = c('root', 'plan', 'decision', 'approval-ref', 'approved'))
+   if (!cmd %in% names(allowed)) fail('Unknown command "', cmd, '". Commands: ', paste(names(allowed), collapse = ', '))
+@@ -511,7 +513,7 @@
+     models = wf_models(a$root),
+     stage6 = wf_stage6(a$root, compare_g = a[['compare-g']], strata = a$strata, strata_columns = a[['strata-columns']]),
+     `stage6-replay` = wf_stage6_replay(a$root, a$g, approved = tf(a$approved)),
++    report = wf_report(a$root, a$title, if (is.null(a$lang)) 'en' else a$lang), status = wf_status(a$root),
+-    report = wf_report(a$root, a$title), status = wf_status(a$root),
+     `sensitivity-status` = sens_status(a$root),
+     `confirm-convergence` = sens_confirm_convergence(a$root, a[['model-id']], approved = tf(a$approved)),
+     `sensitivity-plan` = sens_plan(a$root, n_starts = a[['n-starts']], tol = a$tol, max_iter = a[['max-iter']], seed = a$seed, g = a$g, init = a$init),
+
+--- a/SKILL.md (rc3)
++++ b/SKILL.md (rc4)
+@@ -1,6 +1,6 @@
+ ---
+ name: multivariate-gmm
++description: 使用高斯混合模型（Gaussian Mixture Model, GMM）進行多變量資料分群分析。逐步引導資料匯入、缺失值處理、分析設定、EM 模型估計、BIC/AIC 選模、分群解釋及模型驗證，並產生完整的繁體中文統計報告。適用於 CSV 資料分析與 GMM clustering。
+-description: Guide reproducible Gaussian mixture model data analysis using Hair's six-stage clustering decision process. Use when users request GMM, model-based clustering, Gaussian mixtures, EM fitting, or multivariate mixture-density analysis, including datasets with missing values.
+ ---
+ 
+ # Multivariate GMM statistical analysis
+@@ -75,7 +75,7 @@
+ | 9 | after `stage5` | go on to validation | continue / review | — |
+ | 10 | before `stage6` | compare another G | the alternative Stage 4 named (for example the AIC choice) / none | `stage6 [--compare-g]` |
+ | 11 | after `stage6` | optional replay | run it (settings shown) / skip | `stage6-replay`, `stage6` |
++| 12 | before `report` | report language (asked only here, never at the start) | 繁體中文 (recommended default) / English; one sentence each: same numbers and warnings, only the wording differs | `report --lang zh-TW` or `--lang en`; restate the choice in one line; give the full path of `report/final_report.md` and list the other files |
+-| 12 | — | report | — | `report`; give the full path of `report/final_report.md` and list the other files |
+ 
+ Terms, one sentence each:
+ - **GMM:** describes the data as a mixture of several bell-shaped (normal) groups, each with its own centre, spread and share.
+@@ -128,7 +128,7 @@
+ Rscript $W stage5 --root results/<name>
+ Rscript $W stage6 --root results/<name> [--compare-g 4] [--strata data/<file>.csv --strata-columns site,year]
+ Rscript $W stage6-replay --root results/<name> --g 3,4 --approved true      # optional; then rerun stage6
++Rscript $W report --root results/<name> [--title "..."] [--lang en|zh-TW]          # default en; the Skill asks the user and recommends zh-TW
+-Rscript $W report --root results/<name> [--title "..."]
+ Rscript $W status --root results/<name>
+ ```
+ 
+@@ -254,7 +254,9 @@
+     - Bootstrap/subsampling is optional and needs its own approval.
+     - Never re-select G because of the external labels. Matched agreement is a separate, descriptive figure.
+     - A strata check (e.g. site/year) is descriptive and reported separately; a stratified refit needs approval.
++13. **Report:** ask the report language first (decision point 12), then run `workflow.R report --lang zh-TW|en` (or `report_final.R --manifest ... --lang ...`).
++    - The language changes only the report text and the `report_language` field of `report_manifest.json`. It never changes the Stage 3 spec, spec_hash, model IDs, the active model or any estimate. Both languages can be written for the same analysis, each to a new folder, without refitting.
++    - The zh-TW report keeps all 12 sections and the appendices, keeps every code and the original English messages, and explains them in Chinese. Figures are still in English in this release; the Chinese report adds a Chinese caption and label list for each figure.
+-13. **Report:** run `workflow.R report` (or `report_final.R --manifest`).
+     - Every number must come from the stage files; never add statistics that are not in them.
+     - Never delete earlier outputs. A new report goes to a new directory.
+     - Do not manufacture analyses or skip approvals.
+
+--- /dev/null
++++ b/scripts/report_text.R (rc4)
+@@ -0,0 +1,541 @@
++# Traditional Chinese (zh-TW) text for the final report, and the zh-TW report builder (rc4).
++# The English report is still written by report_final.R exactly as before. This file only adds:
++#   - the Chinese wording (reviewed drafts 01-06 of release/proposals/rc4-zh-TW, approved 2026-11-12);
++#   - a dictionary of every status / warning code the scripts can emit (explanation only; codes are kept);
++#   - Chinese notes for the 41 Appendix A thresholds (values are never changed);
++#   - rp_zh_report(), which writes the zh-TW report from the SAME objects final_report() has already read.
++# Nothing here estimates, re-selects or re-classifies anything. Numbers come from the stage outputs and are
++# formatted by the same md_table()/rp_fmt() as the English report; NA and NaN are shown as recorded.
++RP_TEXT_VERSION <- '1.0.0'
++RP_LANGS <- c('en', 'zh-TW')
++
++# ---------------------------------------------------------------- code dictionary (explanations only)
++RP_ZH_CODES <- c(
++  # outcomes
++  SUCCESS = '這一步完成；若狀態為 WARNING，代表可以繼續，但有必須揭露的限制。',
++  AWAITING_USER_APPROVAL = '正常的停止點：需要使用者決定或核准後才能繼續。',
++  BLOCKED = '統計或資料上的判斷：這個要求無法這樣估計；核准也無法略過。',
++  ERROR = '程式或輸入失敗。',
++  REFUSED = '目前不允許（例如順序不對、缺少核准、檔案不一致），沒有執行任何事。',
++  # import, run, environment
++  PREVIEW_READ_ONLY = '預覽完成；只讀取，沒有寫入或轉換資料。',
++  IMPORTED = '匯入完成，已產生標準化 CSV 與匯入紀錄（含 SHA-256）。',
++  IMPORT_UNDECLARED_MISSING_LIKE = '有空白格或文字 NA 未宣告為缺失值標記；沒有寫入任何檔案，需要使用者決定。',
++  CREATED = '已建立新的分析資料夾。',
++  DONE = '這個階段已完成。',
++  CANCELLED_BY_USER = '使用者取消了這個分析；已產生的檔案都保留。',
++  ENV_OK = '環境檢查通過。', ENV_R_TOO_OLD = 'R 版本低於 4.1。', ENV_JSONLITE_MISSING = '缺少 jsonlite 套件。',
++  ENV_PNG_FAILED = '無法輸出 PNG 圖檔。', ENV_SHA256_UNAVAILABLE = '無法計算 SHA-256；不會改用 MD5。',
++  # Stage 2
++  MISSING_DATA_CHOICE = '資料有缺失值，需要使用者從缺失值選單選擇處理方式。',
++  DIAGNOSTICS_ONLY = '只產生診斷結果，資料沒有被處理。',
++  DIAGNOSTICS_ONLY_CHOSEN = '使用者選擇只做診斷；流程到此結束。',
++  DIAGNOSTICS_WITH_INVALID_VALUES = '資料含無限大值（Inf）；Inf 不視為缺失值，需要修正資料或改選變數。',
++  INVALID_VALUES_INF = '資料含無限大值（Inf）；Inf 不視為缺失值，需要修正資料或改選變數。',
++  PROCESSED_AWAITING_GMM_APPROVAL = '缺失值已依核准的方法處理；進入 Stage 3 前還需要再確認一次。',
++  KNN_ALL_MISSING_ROWS = '有些列的選用變數全部缺失，KNN 無法插補；沒有寫入任何檔案，需要使用者選擇。',
++  KNN_NO_VALID_NEIGHBORS = '有些缺失格找不到可用的鄰居；沒有寫入任何檔案，需要使用者改選方法或變數。',
++  REPORT_ONLY = 'Stage 2 下一步提示：只產生報告。', USER_APPROVAL_THEN_STAGE3 = 'Stage 2 下一步提示：核准後進入 Stage 3。',
++  PRECONDITION_NOT_MET = 'Stage 2 下一步提示：前置條件不足。', EXECUTION_ERROR = 'Stage 2 下一步提示：執行錯誤。',
++  FULL_K = '這一格使用了完整的 k 個鄰居。', FEWER_THAN_K = '可用的鄰居少於 k 個，已使用全部可用的鄰居。',
++  # EDA collinearity flags
++  ZERO_VARIANCE = '這些變數沒有變異（所有值相同），無法用來建模。',
++  TOO_FEW_COMPLETE_ROWS_FOR_RANK_CHECK = '完整列太少，無法檢查是否滿秩。',
++  RANK_DEFICIENT = '資料矩陣不是滿秩：有變數可由其他變數完全線性組合而成。',
++  HIGH_CONDITION_NUMBER = '相關矩陣的條件指數超過門檻，變數之間接近共線。',
++  HIGH_VIF = '這些變數的變異數膨脹因子（VIF）超過門檻。',
++  HIGH_PAIRWISE_CORRELATION = '有一對變數的相關係數絕對值超過門檻。',
++  # Stage 3 statuses and gates
++  PASS = '通過。', WARNING = '可以繼續，但必須在報告中揭露限制。', PAUSE = '需要使用者決定。',
++  STOP = '不能這樣估計（Outcome 為 BLOCKED）；需要修改資料或設定。',
++  STAGE3_DECISIONS_REQUIRED = '還有設定需要使用者決定並核准。', USER_DECISIONS_REQUIRED = '還有設定需要使用者決定並核准。',
++  APPROVED_FOR_FIT = '完整設定已核准，可以估計模型。', STAGE3_STOP = '有檢查為 STOP；需要修改資料或設定。',
++  REVISE_DATA_OR_SPEC = '有檢查為 STOP；需要修改資料或設定。', STAGE4_NOT_IMPLEMENTED = '舊版留下的提示代碼，目前流程不會用到。',
++  `S3-01` = '輸入完整性：數值、有限、無缺失', `S3-02` = '變數可視為連續變數', `S3-03` = '沒有零變異的變數',
++  `S3-04` = '中心化資料矩陣滿秩', `S3-05` = '近似共線（以相關係數衡量）', `S3-06` = '尺度決定（z 分數標準化）',
++  `S3-07` = '離群值篩檢（單變量 |z| > 3、整體馬氏距離 D²）', `S3-08` = '重複值與重複列（可能造成退化成分）',
++  `S3-09` = '合併共變異數矩陣正定且數值條件良好', `S3-10` = '以常態成分作為工作模型（不做整體常態檢定）',
++  `S3-11` = '候選 G 與參數個數 k_G', `S3-12` = '共變異數結構固定（v1 只支援完整共變異數）', `S3-13` = '已記錄分析目標',
++  `S3-14` = '各列為獨立的觀察單位', `S3-15` = '使用者核准完整的 Stage 3 設定',
++  # Stage 4
++  CONVERGED_VALID = '收斂且通過所有數值檢查；只有這種起始點會用來選模型。',
++  NOT_CONVERGED = '達到迭代上限仍未收斂。',
++  DEGENERATE = '退化：成分有效樣本數太小，或共變異數矩陣不是正定、條件數超過上限（共變異數崩塌）。',
++  NUMERIC_ERROR = '計算中出現非有限值，或對數概似在迭代中下降。',
++  INVALID_START = '起始值無效：初始化失敗，或初始分割中有成分的列數太少。',
++  STOP_NO_VALID_MODELS = '所有候選 G 都沒有有效解（Outcome 為 BLOCKED）。',
++  NO_VALID_FIT = '這個 G 沒有任何有效解，不參與模型比較。',
++  SMALL_COMPONENT = '有成分的有效樣本數小於 5 ×（每個成分的參數個數）；該成分的參數估計可能不穩定。',
++  ILL_CONDITIONED_COVARIANCE = '有成分的共變異數條件數超過警告門檻 1e+06；可能接近退化。',
++  SINGLE_START_OPTIMUM = '最佳解只有一個起始點到達，可能不穩定。',
++  MANY_FAILED_STARTS = '超過一半的起始點沒有得到有效解。',
++  MULTIPLE_LOCAL_OPTIMA = '有效起始點停在多個不同的局部最佳解；保留對數概似最高的一個。',
++  LL_DECREASE_FLAGGED = '至少有一個起始點的對數概似出現超過雜訊範圍的下降；下降過大的起始點已判為 NUMERIC_ERROR 並排除。',
++  BOUNDARY = '選定的 G 是搜尋上限。', NOTE = '只估計了部分 G。',
++  # confirmation and sensitivity
++  NO_MATERIAL_CHANGE = '以嚴格標準繼續迭代，對數概似沒有增加到門檻以上；這不證明已到達局部最大值。',
++  POSSIBLE_PREMATURE_STOP = '以嚴格標準繼續迭代後，對數概似增加超過門檻，原本可能停得太早；這是經驗規則，不是統計檢定。',
++  CLOSED_FORM_NOT_ITERATIVE = 'G = 1 有公式解，不需要迭代。', NOT_ELIGIBLE = '原本就不是收斂且有效的起始點，維持原狀態。',
++  REPLAY_MISMATCH = '重新執行無法重現原本結果，這個起始點無法確認。',
++  STRICT_NOT_CONVERGED = '在嚴格標準下未收斂。', STRICT_DEGENERATE = '在嚴格標準下退化。', STRICT_NUMERIC_ERROR = '在嚴格標準下發生數值錯誤。',
++  AT_STRICT_BEST = '在嚴格標準下到達所有起始點中的最佳值（差距小於門檻）。', BELOW_STRICT_BEST = '在嚴格標準下沒有到達最佳值。',
++  ORIGINAL_BEST_PREMATURE = '原本的最佳起始點可能停得太早。',
++  BETTER_OPTIMUM_HIDDEN = '嚴格標準下另一個起始點得到更高的對數概似；更好的解只能透過新的敏感度計畫進入，不會自動取代。',
++  PLANNED = '計畫已建立，等待核准；尚未估計。', AWAITING_APPROVAL = '計畫已建立，等待核准；尚未估計。',
++  RUNNING = '已核准，正在估計；流程結束後仍是此狀態表示被中斷。', FIT_COMPLETED = '估計已完成並記錄。',
++  CONFIRMED = '收斂確認已執行並記錄；不代表通過，要看確認結果。', WILL_RUN = '收斂確認會執行。',
++  NOT_RUN = '收斂確認不會執行；不可描述為通過。', CONFIRMATION_NOT_RUN = '收斂確認未執行；不可描述為通過。',
++  NO_FLAGS = '收斂確認沒有發現問題。', CONFIRMATION_INCOMPLETE = '不是每個有效起始點都能被確認。', INCOMPLETE = '確認不完整。',
++  BETTER_SOLUTION_INDICATED = '收斂確認顯示可能有更好的解。',
++  CANDIDATE_REGISTERED = '新模型已登錄為候選模型；目前使用的模型不變。',
++  NO_NEW_CANDIDATE = '新的估計與已登錄模型完全相同，沒有登錄新模型（這是結果，不是失敗）。', NOT_REGISTERED = '沒有登錄新模型。',
++  ACTIVE_MODEL_DECISION = '需要使用者決定是否換成候選模型。', SENSITIVITY_PLAN_APPROVAL = '等待使用者核准敏感度計畫。',
++  SENSITIVITY_RUN_UNFINISHED = '先前的執行被中斷，需要撤回並建立新計畫。',
++  SENSITIVITY_RUN_FAILED = '有步驟失敗；已完成的輸出保留。', FAILED = '有步驟失敗；已完成的輸出保留。',
++  SENSITIVITY_KEEP_ACTIVE = '計畫已關閉，保留目前的模型。', CLOSED_KEEP_ACTIVE = '計畫已關閉，保留目前的模型。',
++  SENSITIVITY_WITHDRAWN = '計畫已撤回，不刪除任何檔案或候選模型。', WITHDRAWN = '計畫已撤回，不刪除任何檔案或候選模型。',
++  ACTIVE = '目前使用中的模型。', CANDIDATE = '候選模型。',
++  # Stage 6
++  SPLIT = '選定模型的一個成分，在比較模型中分成兩個以上的子成分（子成分取走它至少 10% 的列，且自己至少 80% 來自它）。',
++  MIXED = '比較模型的一個成分，來自最主要選定成分的比例不到 80%，由多個選定成分混合而成。',
++  KEPT = '比較模型的一個成分，至少 80% 來自某個選定成分，且包含該成分至少 90% 的列，幾乎原樣保留。',
++  # warnings registry
++  S2_MISSING_MECHANISM = '缺失機制（MCAR／MAR／MNAR）無法從缺失值計數判斷。',
++  S2_SINGLE_IMPUTATION = '使用單一插補；插補值在後續階段被當成觀測值，插補的不確定性沒有被反映。',
++  S2_ROWS_REMOVED = '建模前刪除了部分列；結果只描述保留下來的列。',
++  S2_COLLINEARITY = '變數之間有共線性旗標。',
++  S3_INDEPENDENCE_NOTE = '使用者核准 Stage 3 時寫下的獨立性說明（原文引用）。',
++  S4_BOUNDARY_OPTIMUM = '選定的 G 是搜尋上限；要擴大範圍需要重新核准 Stage 3。',
++  S4_BIC_AIC_DISAGREE = 'BIC 和 AIC 選的 G 不同。',
++  S6_OPTIMA_DISAGREE = '選定 G 的不同局部最佳解，分割可能差很多。',
++  S6_BOOTSTRAP_NOT_RUN = '沒有執行拔靴法或子抽樣（選用）。',
++  S6_STRATA = '抽樣結構的描述性檢查：各成分集中在同一層的比例；只是描述，不是檢定。',
++  S6_EXTERNAL_NOT_PERFORMED = '沒有外部標籤，未進行外部驗證。',
++  INFO = '資訊：提醒讀者注意，不影響可否繼續。', LIMITATION = '限制：會影響結果適用範圍的已知條件。',
++  AUTO_DIAGNOSTIC = '自動診斷：由各階段輸出自動產生。',
++  USER_APPROVED_LIMITATION = '使用者核准的限制：來自核准的設定或已確認的登錄紀錄。',
++  ANALYST_NOTE = '分析者註記：經使用者確認的解讀，不是已確立的統計結果。',
++  NOT_CITED = '未引用：屬於其他模型、已被取代或尚待確認。')
++
++rp_zh_code <- function(code) {
++  k <- sub(':.*$', '', trimws(code))
++  if (!is.na(RP_ZH_CODES[k])) unname(RP_ZH_CODES[k]) else '（此代碼尚無中文說明，請參考原文）'
++}
++
++# ---------------------------------------------------------------- Appendix A: Chinese names and actual rules (values unchanged)
++RP_ZH_HEUR <- list(
++  `abs_r flag` = c('高相關旗標', '|r| > 0.90 → HIGH_PAIRWISE_CORRELATION'),
++  `condition index flag` = c('條件指數旗標', '條件指數 > 30 → HIGH_CONDITION_NUMBER'),
++  `VIF flag` = c('VIF 旗標', 'VIF > 10 → HIGH_VIF'),
++  `IQR outlier rule` = c('四分位距離群規則', '值 < Q1 − 1.5 IQR 或 > Q3 + 1.5 IQR → 計入 n_iqr_outliers（不刪除）'),
++  `|z| outlier count` = c('|z| 離群計數', '|z| > 3 → 計入 n_abs_z_gt3（不刪除）'),
++  `scatter-matrix size limit` = c('散布圖矩陣變數上限', 'p > 12 時不畫散布圖矩陣（只影響圖）'),
++  `KNN k suggestion` = c('KNN 建議的 k', '未指定 --k 時預設 5；由使用者決定'),
++  min_unique_values = c('最少相異值個數', '相異值 < 10 → S3-02 PAUSE'),
++  max_value_share = c('單一值最大占比', '占比 > 0.20 → S3-08 WARNING'),
++  condition_index_corr = c('相關矩陣條件指數', '> 30 → S3-05 WARNING'),
++  vif = c('變異數膨脹因子', 'VIF > 10 → S3-05 WARNING'),
++  abs_r = c('相關係數絕對值', '|r| > 0.90 → S3-05 WARNING'),
++  sd_ratio_scale = c('標準差比值（尺度提醒）［⚠ 規格與實作不一致］',
++                     '⚠ 登錄值 10 未被程式讀取。程式實際規則：選原始單位且標準差比值 > 100 → S3-06 WARNING（規格待修正，rc4 不修改）'),
++  cov_condition_numeric = c('整體共變異數條件數', '> 1e+10，或原始單位的 Cholesky 失敗 → S3-09 WARNING；相關矩陣 Cholesky 失敗 → STOP'),
++  mahalanobis_quantile = c('馬氏距離篩檢分位數', 'D² > χ²(p) 的 0.999 分位數 → S3-07 WARNING（不刪除）'),
++  abs_skew = c('偏態絕對值', '|偏態| > 2 → S3-10 WARNING'),
++  excess_kurtosis = c('超額峰度', '> 7 → S3-10 WARNING'),
++  obs_per_param_per_component = c('每個參數的平均觀測數', 'n/G < 5 × q → 候選 G WARNING（n/G < p + 1 或 k_G ≥ n 為 STOP，屬數學條件）'),
++  min_effective_n = c('最小有效樣本數', 'N_k < p + 1 或混合比例 ≤ 0 → 起始點 DEGENERATE'),
++  max_cov_condition = c('共變異數條件數上限', '> 1e+10 或非有限 → 起始點 DEGENERATE'),
++  `log-lik decrease bands` = c('對數概似下降分級', '下降 > 1e-10 → 計入並產生 LL_DECREASE_FLAGGED；下降 > 1e-06 → NUMERIC_ERROR'),
++  initialisation = c('初始化方法', '預設 stats::kmeans（Hartigan–Wong，iter.max 100，nstart 1）'),
++  same_optimum_loglik_rel = c('同一最佳解：對數概似相對差', '相對差 < 1e-06 且參數差 < 0.01 → 視為同一局部最佳解'),
++  same_optimum_param = c('同一最佳解：參數差', '對齊後 π、μ、Σ 最大差 < 0.01（與上一項同時成立）'),
++  small_component = c('小成分警告', 'N_k < 5 × (p + p(p+1)/2) 且 G > 1 → SMALL_COMPONENT'),
++  cov_condition_warning = c('共變異數條件數警告', '> 1e+06 → ILL_CONDITIONED_COVARIANCE'),
++  single_start_optimum = c('單一起始點最佳解', 'G > 1 且到達最佳解的起始點 < 2 → SINGLE_START_OPTIMUM'),
++  failed_start_fraction = c('失敗起始點比例', '非 CONVERGED_VALID 比例 > 0.5 → MANY_FAILED_STARTS'),
++  delta_bic_alternative = c('保留比較模型的 ΔBIC 上限', 'ΔBIC ≤ 6 → 保留給 Stage 6 比較（不改變選定模型）'),
++  ambiguous = c('歸屬不明確門檻', 'U > 0.10 → 列為歸屬不明確（不刪除、不重新分類）'),
++  descriptor = c('成分描述門檻', 'd ≥ 0.5 高於、d ≤ −0.5 低於，其餘接近整體平均（只影響文字描述）'),
++  trivial_partitions = c('只有一類時的指數規則', '兩邊都只有一類 → 特別分支給 ARI = NMI = 1；只有一邊只有一類 → 依公式為 0'),
++  split_share = c('分裂的最低占比', '≥ 10%（與純度條件同時成立）'),
++  split_purity = c('分裂的純度', '≥ 80% 為子成分；< 80% 為 MIXED'),
++  matched_agreement = c('最佳一對一配對一致率（Best one-to-one matching agreement）', '窮舉一對一配對取一致筆數最多者；max(G, K) > 8 不計算（NA）'),
++  `NMI normalisation` = c('NMI 正規化方式', '2I／(H(U)+H(V))（算術平均）'),
++  strict_tol = c('嚴格收斂容許誤差', '收斂確認時使用'),
++  strict_max_iter = c('嚴格迭代上限', '到上限仍未收斂 → STRICT_NOT_CONVERGED'),
++  premature_gain_abs = c('過早停止的增益門檻', '增益 ≥ 0.1 → POSSIBLE_PREMATURE_STOP（不會取代模型）'),
++  replay_match_abs = c('初始化重播一致容許差', '差距 > 1e-08 → REPLAY_MISMATCH'),
++  `random-soft responsibilities` = c('random-soft 初始責任度分布', '每列從 Dirichlet(1, …, 1) 抽樣（只在 random-soft 時使用）'))
++
++RP_ZH_HEUR_TYPE <- c(heuristic = '經驗門檻', `project choice` = '專案選擇', descriptive = '描述性', convention = '慣例',
++                     choice = '方法選擇', `display choice` = '顯示設定', screening = '篩檢')
++
++# ---------------------------------------------------------------- figures: Chinese caption, note and label pairs (images stay English in rc4)
++RP_ZH_FIG <- list(
++  stage2_diagnostics__eda_distributions.png = list('各變數分布', '每個變數觀測值的直方圖與密度曲線；圖上方標示觀測數與偏態。', 'Distributions＝分布；skew＝偏態'),
++  stage2_diagnostics__eda_boxplots.png = list('盒鬚圖', '盒鬚延伸到 1.5 倍四分位距；紅點是落在盒鬚之外的值（只標示，不刪除）。', 'whiskers＝盒鬚；beyond whiskers＝盒鬚之外'),
++  stage2_diagnostics__eda_scatter_matrix.png = list('散布圖矩陣', '變數兩兩的散布圖，只用兩變數都有值的列，沒有依任何分組上色。', 'pairwise complete＝兩變數都有值的列；no group labels＝沒有分組上色'),
++  stage2_diagnostics__eda_correlation_heatmap.png = list('相關係數熱圖', '皮爾森相關係數，範圍 −1 到 1。', 'Pearson correlation＝皮爾森相關係數'),
++  stage2_diagnostics__missingness_map.png = list('缺失值分布圖', '橫軸是變數，縱軸是來源列號；紅色表示缺失。', 'Variable＝變數；Source row index＝來源列號；red = missing＝紅色為缺失'),
++  stage4__loglik_histories.png = list('對數概似迭代軌跡', '每個 G 一張小圖：各起始點每次迭代的對數概似。藍線是最佳有效起始點，灰線是其他有效起始點，紅色虛線是失敗或未收斂。', 'Iteration＝迭代次數；Observed log-likelihood＝觀測資料對數概似；valid＝有效'),
++  stage4__bic_aic.png = list('BIC 與 AIC', '不同 G 的 BIC（藍）與 AIC（紅），越小越好；黑色標記是選定模型。', 'Number of components G＝混合成分數 G；Criterion (smaller is better)＝準則值（越小越好）；selected＝選定'),
++  stage5__mean_profile_original.png = list('成分平均（原始單位）', '每個變數一張小圖：各成分平均，誤差線為成分內 ±1 標準差。', 'Component＝成分；within-component SD＝成分內標準差'),
++  stage5__mean_profile_standardized.png = list('標準化成分平均剖面', '縱軸是（成分平均 − 整體平均）÷ 整體標準差；0 表示與整體平均相同。', '(component mean - overall mean) / overall SD＝（成分平均 − 整體平均）÷ 整體標準差'),
++  stage5__correlation_heatmaps.png = list('成分內相關係數', '每個成分內變數之間的相關係數（由該成分的共變異數矩陣計算）。', 'Component k (pi = …)＝成分 k（混合比例 π）'),
++  stage5__pca_projection.png = list('主成分分析投影', '資料投影到前兩個主成分，依最大後驗成分上色；空心圓是歸屬不明確的列，橢圓是各成分 95% 範圍的投影。這只是視覺化，GMM 是在所有選用變數上估計的。', 'PC1／PC2＝第一／第二主成分；open circle＝空心圓；ellipse＝橢圓'),
++  stage5__uncertainty.png = list('後驗不確定性', '左：U = 1 − 最大後驗機率的分布；右：各成分的 U。', 'MAP component＝最大後驗成分'),
++  stage6__stability_plot.png = list('多起始點穩定性', '每個 G 一張小圖：每個起始點與最佳解的對數概似差距（0 為到達最佳解），顏色代表對齊後屬於哪一個局部最佳解。', 'Start＝起始點；best log-lik - start log-lik＝最佳對數概似 − 該起始點對數概似；optima＝局部最佳解'),
++  stage6__model_sensitivity_plot.png = list('模型敏感度', '左：選定模型與比較模型的 ΔBIC、ΔAIC（0 為所有候選中最好）；右：各成分依最大後驗分類的列數。', 'delta from best over all G＝與所有 G 中最佳值的差距；MAP count＝最大後驗分類列數'),
++  stage6__component_label_heatmap.png = list('成分 × 標籤', '各成分與外部標籤交叉的列數。', 'Component x label＝成分 × 標籤'))
++
++# ---------------------------------------------------------------- helpers
++rp_zh_num <- function(x, d = 4) { if (is.null(x) || !length(x)) return('NA'); if (is.numeric(x)) ifelse(is.nan(x), 'NaN', ifelse(is.na(x), 'NA', rp_fmt(x, d))) else as.character(x) }
++rp_zh_int <- function(x) { if (is.null(x) || !length(x)) return('NA'); if (is.numeric(x)) ifelse(is.nan(x), 'NaN', ifelse(is.na(x), 'NA', formatC(x, format = 'd', big.mark = ''))) else as.character(x) }
++rp_zh_yesno <- function(x) if (isTRUE(x)) '是' else if (isFALSE(x)) '否' else as.character(x)
++
++# Stage 5 descriptions are reused, never re-derived: parse, verify by exact round trip, else keep the original.
++rp_zh_desc_line <- function(s) {
++  parse_items <- function(rest) {
++    m <- gregexpr('(.+?) \\(([+-][0-9]+\\.[0-9]{2}) SD; mean ([^)]*)\\)(, |$)', rest, perl = TRUE)
++    hits <- regmatches(rest, m)[[1]]; if (!length(hits)) return(NULL)
++    parts <- regmatches(hits, regexec('^(.+?) \\(([+-][0-9]+\\.[0-9]{2}) SD; mean ([^)]*)\\)(, )?$', hits, perl = TRUE))
++    if (any(lengths(parts) < 4)) return(NULL)
++    d <- data.frame(var = vapply(parts, `[`, '', 2), d = vapply(parts, `[`, '', 3), mean = vapply(parts, `[`, '', 4), stringsAsFactors = FALSE)
++    if (!identical(paste(sprintf('%s (%s SD; mean %s)', d$var, d$d, d$mean), collapse = ', '), rest)) return(NULL)
++    d
++  }
++  item_zh <- function(d) paste(sprintf('%s（%s SD；平均 %s）', d$var, d$d, trimws(d$mean)), collapse = '、')
++  for (k in c('higher', 'lower')) {
++    pre <- sprintf('%s than the overall mean: ', k)
++    if (startsWith(s, pre)) { d <- parse_items(substring(s, nchar(pre) + 1L)); if (is.null(d)) return(NULL)
++      return(sprintf('%s：%s', if (k == 'higher') '高於整體平均' else '低於整體平均', item_zh(d))) }
++  }
++  mm <- regmatches(s, regexec('^near the overall mean \\(\\|d\\| < ([^ ]+) SD\\): (.+)$', s, perl = TRUE))[[1]]
++  if (length(mm) == 3L) { vars <- strsplit(mm[3], ', ', fixed = TRUE)[[1]]
++    if (!identical(paste('near the overall mean (|d| < ', mm[2], ' SD): ', paste(vars, collapse = ', '), sep = ''), s)) return(NULL)
++    return(sprintf('接近整體平均（|d| < %s SD）：%s', mm[2], paste(vars, collapse = '、'))) }
++  NULL
++}
++rp_zh_desc <- function(lines) {
++  z <- lapply(lines, rp_zh_desc_line)
++  if (any(vapply(z, is.null, NA))) return(list(ok = FALSE, text = NULL))
++  list(ok = TRUE, text = unlist(z))
++}
++
++# ARI / NMI cases from the counts actually used (no thresholds): A normal, B one side has one class,
++# C both sides one class (special branch), S both sides all singletons (special branch), D no usable rows.
++rp_zh_agreement_case <- function(n_used, comp_sizes, label_sizes) {
++  comp_sizes <- comp_sizes[comp_sizes > 0]; label_sizes <- label_sizes[label_sizes > 0]
++  if (is.null(n_used) || is.na(n_used) || n_used == 0) return('D')
++  g <- length(comp_sizes); k <- length(label_sizes)
++  if (g == 1L && k == 1L) return('C')
++  if (n_used > 1 && all(comp_sizes == 1) && all(label_sizes == 1)) return('S')
++  if (g == 1L || k == 1L) return('B')
++  'A'
++}
++RP_ZH_AGREE_NOTE <- c(
++  A = '',
++  B = '只有一邊只有一類（{side}），ARI 和 NMI 依公式為 0；這表示無法從分割比較中得到資訊，不代表兩者「完全不一致」。',
++  C = '兩邊都只有一類，程式依特別規則給 ARI = NMI = 1（附錄 A 的 trivial_partitions）。這種情況沒有可比較的分群資訊，不代表一致，也不能當作驗證成功。',
++  S = '兩邊都是每列各自一類（singleton partition），程式的特別分支給出的 ARI／NMI 不能當作一般分群一致性的證據（見規格差異 S-2）。',
++  D = '沒有可用的標籤列（n_used = 0），指標無法計算；程式輸出的值（ARI {ari}、NMI {nmi}）沒有意義，不可解讀為一致（見規格差異 S-3）。')
++rp_zh_agree_text <- function(case, ari, nmi, side = '') {
++  s <- RP_ZH_AGREE_NOTE[[case]]; s <- sub('{side}', side, s, fixed = TRUE); s <- sub('{ari}', rp_zh_num(ari), s, fixed = TRUE); sub('{nmi}', rp_zh_num(nmi), s, fixed = TRUE)
++}
++
++# ---------------------------------------------------------------- zh-TW report builder
++# e: the environment of final_report() after the English report has been assembled (all files already read).
++rp_zh_report <- function(e) {
++  G0 <- function(n) get0(n, envir = e, inherits = FALSE)
++  m <- G0('m'); dirs <- G0('dirs'); figs <- G0('figs'); d2 <- G0('d2'); lg2 <- G0('lg2'); lgp <- G0('lgp'); pr <- G0('pr')
++  s3 <- G0('s3'); s3c <- G0('s3c'); s3cand <- G0('s3cand'); mc <- G0('mc'); sel <- G0('sel'); rc4 <- G0('rc4'); cs4 <- G0('cs4')
++  s5 <- G0('s5'); cs5 <- G0('cs5'); cm5 <- G0('cm5'); sd5 <- G0('sd5'); us5 <- G0('us5'); amb5 <- G0('amb5')
++  s6 <- G0('s6'); st6 <- G0('st6'); ms6 <- G0('ms6'); ex6 <- G0('ex6'); w6 <- G0('w6'); b6 <- G0('b6'); cl6 <- G0('cl6'); str6 <- G0('str6')
++  feats <- G0('feats'); done <- G0('done'); dx_only <- G0('dx_only'); ds <- G0('ds'); cp <- G0('cp'); co <- G0('co'); vm <- G0('vm'); ps <- G0('ps')
++  reg <- G0('reg'); reg_dir <- G0('reg_dir'); rid <- G0('rid'); rtab <- G0('rtab'); sc <- G0('sc'); hz <- G0('hz')
++  fig <- function(k, f) { nm <- paste0(k, '__', gsub('/', '_', f)); if (!nm %in% names(figs)) return(character()); z <- RP_ZH_FIG[[nm]]
++    if (is.null(z)) stop('Missing Chinese caption for figure ', nm, call. = FALSE)
++    c(sprintf('![%s](figures/%s)', z[[1]], nm), '', sprintf('*圖說：%s*（圖中文字為英文：%s）', z[[2]], z[[3]])) }
++  sel_dw <- if (!is.null(mc) && !is.null(sel)) { v <- mc$diagnostic_warnings[mc$G == sel$selected_G]; if (length(v) && !is.na(v) && nzchar(v)) strsplit(v, ' | ', fixed = TRUE)[[1]] else character() } else character()
++  dw_codes <- sub(':.*$', '', sel_dw)
++
++  stage_zh <- c(`Stage 2 diagnostics` = 'Stage 2 診斷', `Stage 2 processing` = 'Stage 2 缺失值處理', `Stage 3 approved spec` = 'Stage 3 核准設定',
++                `Stage 4 fit + selection` = 'Stage 4 估計與選模', `Stage 5 interpretation` = 'Stage 5 解釋', `Stage 6 validation` = 'Stage 6 驗證')
++  L <- c(sprintf('# %s', if (is.null(m$title)) '高斯混合模型（Gaussian Mixture Model, GMM）分析報告' else m$title), '',
++         sprintf('- 產生時間：%s（UTC），由 `report_final.R` v%s 產生；報告語言：繁體中文（zh-TW）。', format(Sys.time(), '%Y-%m-%d %H:%M', tz = 'UTC'), RP_VERSION),
++         sprintf('- 包含的階段：%s。', paste(sprintf('%s（%s）', stage_zh[names(done)], ifelse(done, '有', '無')), collapse = '；')),
++         '- **以下所有數值都讀自 `report_manifest.json` 列出的各階段輸出檔；產生這份報告時沒有重新估計任何模型。**',
++         if (dx_only) '- 依使用者選擇（只做診斷），流程在缺失值診斷後結束，沒有估計任何模型。' else NULL,
++         if (!is.null(m$model_source_note)) paste0('- 模型來源（原文）：', m$model_source_note) else NULL,
++         if (!is.null(m$active_model_id)) sprintf('- 目前使用的核准模型（active model）：`%s`（G = %s，對數概似 %.4f，BIC %.3f；Stage 4 輸出：`%s`）。', m$active_model_id, m$active_model$G, m$active_model$loglik, m$active_model$BIC, m$active_model$dir) else NULL,
++         '', '> **本報告怎麼讀：**依高斯混合模型（Gaussian Mixture Model, GMM）的分析階段整理。每節先列出程式算出的結果，再用一兩句白話說明。表格欄位名稱保留英文，與輸出檔欄位相同。混合成分（component）是描述資料分布的統計成分，**不一定對應真實存在的群體**。圖中文字目前為英文，每張圖下附中文圖說。')
++
++  # 1
++  L <- c(L, '', '## 1. 研究目標', '',
++         sprintf('- 研究目標（使用者陳述，原文）：%s', if (is.null(m$objective_text)) '未記錄' else m$objective_text),
++         sprintf('- 分析類型：%s（非監督式（unsupervised）高斯混合模型，各成分使用完整共變異數（full covariance））。',
++                 { ob <- if (!is.null(s3$objective)) s3$objective else m$objective; if (is.null(ob)) '未記錄' else switch(ob, clustering = '分群（clustering）', density = '密度描述（density）', ob) }),
++         sprintf('- 建模變數（%d 個）：%s。', length(feats), paste(feats, collapse = ', ')),
++         if (is.null(m$label)) '- 外部標籤（external label）：無。' else sprintf('- 外部標籤（external label）：`%s`，只保留在 Stage 6 做事後比對，從未用於模型估計或模型選擇。', m$label),
++         '', '白話：高斯混合模型假設資料由幾個常態分布疊加而成，每個混合成分有自己的中心、分散程度與占比。分析時不使用任何已知分組，所以是非監督式方法。')
++
++  # 2
++  L <- c(L, '', '## 2. 資料描述與探索性分析', '',
++         sprintf('- 輸入檔：`%s`（MD5 `%s`），共 %s 列；選用 %d 個變數。', if (!is.null(lg2)) lg2$input$path else m$input, if (!is.null(lg2)) lg2$input$md5 else '-', rp_zh_int(if (!is.null(d2)) d2$n_observations else NA), length(feats)),
++         if (!is.null(m$data_source)) sprintf('- 資料來源紀錄：`%s`（全文見附錄 B）。', m$data_source) else NULL,
++         '', '**敘述統計（每個變數的觀測值；Stage 2 探索性資料分析（exploratory data analysis, EDA））**', '',
++         md_table(if (is.null(ds)) NULL else ds[, intersect(c('variable', 'n_observed', 'n_missing', 'mean', 'sd', 'min', 'median', 'max', 'skewness', 'excess_kurtosis', 'n_iqr_outliers', 'n_abs_z_gt3'), names(ds))]),
++         '', '*欄位說明：n_observed 觀測數；n_missing 缺失數；mean、sd、min、median、max 為平均、標準差、最小、中位數、最大；skewness 偏態（skewness）；excess_kurtosis 超額峰度（excess kurtosis）；n_iqr_outliers 超出 1.5 倍四分位距的個數；n_abs_z_gt3 為 |z| > 3 的個數（只計數，不刪除）。*',
++         '', '**變數兩兩相關（各對變數都有值的列）**', '', md_table(if (is.null(cp)) NULL else cp[, intersect(c('var1', 'var2', 'n_pairwise', 'pearson_r', 'ci95_low', 'ci95_high', 'spearman_rho'), names(cp))]),
++         '', '*欄位說明：n_pairwise 兩變數都有值的列數；pearson_r 皮爾森相關係數（Pearson r），ci95_low／ci95_high 為 95% 信賴區間（confidence interval）；spearman_rho 斯皮爾曼等級相關係數（Spearman ρ）。*',
++         '', if (!is.null(co)) sprintf('- 共線性（collinearity，完整列 n = %d）：條件指數（condition index）%s；滿秩（full rank）：%s；旗標：%s。', co$n_complete_rows, rp_fmt(co$condition_number, 2),
++                                         rp_zh_yesno(co$full_rank), if (length(co$flags)) paste(sprintf('`%s`（%s）', co$flags, vapply(co$flags, rp_zh_code, '')), collapse = '；') else '無') else NULL,
++         if (!is.null(co) && length(co$flags)) c('', '白話：有些變數高度相關或接近線性相依，GMM 各成分的共變異數矩陣可能接近奇異；Stage 3 會再檢查，變數不會被自動刪除。') else NULL,
++         '', fig('stage2_diagnostics', 'eda/distributions.png'), '', fig('stage2_diagnostics', 'eda/boxplots.png'), '',
++         fig('stage2_diagnostics', 'eda/scatter_matrix.png'), '', fig('stage2_diagnostics', 'eda/correlation_heatmap.png'))
++
++  # 3
++  method_zh <- function(x) switch(x, `complete-case` = '完整案例分析（complete-case analysis：刪除有缺失值的列）', mean = '平均數插補（imputation）', median = '中位數插補', knn = 'k 最近鄰（k-nearest neighbours, KNN）插補', x)
++  L <- c(L, '', '## 3. 缺失值診斷與處理', '',
++         sprintf('- 缺失值（missing value）：%s 格中有 %s 格缺失（比例 %s）；NA %s、NaN %s、Inf %s。完整列 %s；不完整列 %s；所有選用變數都缺失的列 %s%s。',
++                 rp_zh_int(d2$n_observations * d2$n_variables), rp_zh_int(d2$missing_cells), rp_fmt(d2$overall_missing_rate, 4), rp_zh_int(d2$na_cells), rp_zh_int(d2$nan_cells), rp_zh_int(d2$infinite_cells),
++                 rp_zh_int(d2$complete_cases), rp_zh_int(d2$incomplete_cases), rp_zh_int(d2$all_missing_row_count), if (length(d2$all_missing_source_rows)) paste0('（來源列 ', paste(d2$all_missing_source_rows, collapse = ', '), '）') else ''),
++         '- 缺失機制（完全隨機缺失 MCAR／隨機缺失 MAR／非隨機缺失 MNAR）無法從這些計數判斷。', '', md_table(vm), '', md_table(ps), '',
++         fig('stage2_diagnostics', 'missingness_map.png'),
++         '', sprintf('**處理決定：**%s', switch(if (is.null(m$stage2_decision)) 'unknown' else m$stage2_decision,
++           'not-needed' = '沒有缺失值，不需要處理。', 'diagnostics-only' = '只做診斷（沒有刪除或插補任何列）。',
++           'processed' = sprintf('%s（`%s`），經使用者核准。保留 %s 列，刪除 %s 列（來源列：%s）；插補 %s 格。', method_zh(lgp$method), lgp$method, rp_zh_int(lgp$rows_retained), rp_zh_int(lgp$rows_removed$count),
++                                 if (length(lgp$rows_removed$source_row_ids)) paste(lgp$rows_removed$source_row_ids, collapse = ', ') else '無', rp_zh_int(lgp$imputed_cells$total)),
++           'undecided' = '尚待使用者從缺失值選單中選擇。', 'unknown' = '未記錄。')),
++         if (identical(m$stage2_decision, 'processed') && !is.null(lgp) && isTRUE(lgp$imputed_cells$total > 0))
++           c('', sprintf('- 插補細節：方法 `%s`%s；各變數插補格數：%s。這是單一插補（single imputation）：後續階段把插補值當成觀測值使用，插補本身的不確定性沒有被反映。',
++                         lgp$method, if (!is.null(lgp$knn)) sprintf('，k = %d，可用鄰居少於 k 的格數 = %d', lgp$knn$k, lgp$knn$cells_with_fewer_than_k_donors) else '',
++                         paste(sprintf('%s = %d', names(lgp$imputed_cells$by_variable), unlist(lgp$imputed_cells$by_variable)), collapse = ', '))) else NULL,
++         if (identical(m$stage2_decision, 'processed') && !is.null(lgp)) c('', paste0('白話：',
++           if (identical(lgp$method, 'complete-case') && isTRUE(lgp$rows_removed$count > 0)) sprintf('刪除了 %s 列，之後的結果只描述保留下來的 %s 列；如果缺失不是隨機發生，結果可能有偏差。', rp_zh_int(lgp$rows_removed$count), rp_zh_int(lgp$rows_retained))
++           else if (lgp$method %in% c('mean', 'median')) '插補值都落在同一個數值上，可能讓資料看起來比實際更集中，並削弱變數之間的相關。'
++           else if (identical(lgp$method, 'knn')) sprintf('每個缺失值用最相似的 %s 列推估；推估值不是真正觀測到的資料。', if (!is.null(lgp$knn)) lgp$knn$k else 'k')
++           else '處理方式依上方紀錄。')) else NULL)
++
++  if (!dx_only) {
++    # 4
++    L <- c(L, '', '## 4. 模型假設與限制（Stage 3）', '')
++    if (is.null(s3)) L <- c(L, '- Stage 3 設定尚未核准，沒有估計模型。') else {
++      scale_zh <- switch(s3$scale$method, zscore = 'z 分數標準化（z-score standardisation）', none = '原始單位', s3$scale$method)
++      ind_assumed <- is.character(s3$rows_independent) && s3$rows_independent %in% c('assumed', 'working assumption')
++      ind_zh <- if (isTRUE(s3$rows_independent)) '是' else if (ind_assumed) sprintf('工作假設（working assumption，原值 `%s`）', s3$rows_independent) else if (isFALSE(s3$rows_independent)) '否' else as.character(s3$rows_independent)
++      obj_zh <- switch(as.character(s3$objective), clustering = '分群', density = '密度描述', as.character(s3$objective))
++      nw <- sum(s3c$status == 'WARNING'); cw <- s3cand$G[s3cand$status %in% c('WARNING', 'STOP')]
++      L <- c(L, sprintf('- 核准設定 `%s`（核准編號 `%s`）：尺度 = %s；分析目標 = %s；觀察值是否獨立 = %s；候選成分數 G = %s；共變異數結構 = %s；離群值處理 = %s。',
++                        s3$spec_hash, s3$approval_id, scale_zh, obj_zh, ind_zh, paste(s3$G_candidates, collapse = ', '), s3$covariance, s3$outlier_policy),
++             if (!is.null(s3$independence_note)) paste0('- 獨立性註記（使用者核准，原文）：', s3$independence_note) else NULL,
++             '- 不需要整體多變量常態檢定：模型只假設每個混合成分是常態分布，不假設整份資料是單一常態分布。', '',
++             md_table(s3c[, c('id', 'check', 'status', 'evidence')]), '',
++             paste0('*檢查項目中文名稱：', paste(sprintf('%s %s（%s）', s3c$id, vapply(s3c$id, rp_zh_code, ''), s3c$status), collapse = '；'), '。evidence 欄為程式原文。*'),
++             '', '**候選成分數 G 的可行性**', '', md_table(s3cand[, c('G', 'k_G', 'n_per_component', 'n_over_k', 'status')]),
++             '', '*欄位說明：k_G 參數個數；n_per_component 每個成分平均可用的列數；n_over_k 列數與參數個數的比值。*',
++             '')
++      w4 <- c(if (identical(s3$scale$method, 'zscore')) '變數單位不同，標準化後每個變數的影響力才不會只取決於單位大小。' else NULL,
++              if (ind_assumed) '各列是否彼此獨立無法從資料本身證明；本分析把它當作工作假設，結果也依賴這個假設。' else NULL,
++              if (nw > 0) sprintf('有 %d 項檢查是 WARNING：分析可以繼續，但限制列在第 11 節。', nw) else NULL,
++              if (length(cw)) sprintf('候選 G = %s 被標為 WARNING 或 STOP：G 越大，需要估計的參數越多，可用的列數相對不足時估計可能不穩定。', paste(cw, collapse = ', ')) else NULL)
++      if (length(w4)) L <- c(L, paste0('白話：', paste(w4, collapse = '')))
++    }
++    # 5
++    L <- c(L, '', '## 5. 模型估計與收斂（Stage 4A–4C）', '')
++    if (is.null(mc)) L <- c(L, '- 未執行。') else {
++      sg <- if (!is.null(sel)) sel$selected_G else NA
++      fails <- sum(mc[, intersect(c('n_not_converged', 'n_degenerate', 'n_numeric_error', 'n_invalid_start'), names(mc))], na.rm = TRUE)
++      nopt <- if (!is.na(sg)) mc$n_distinct_optima[mc$G == sg] else NA
++      L <- c(L, sprintf('- 以期望最大化演算法（Expectation–Maximization, EM）估計 GMM。設定：每個 G 使用 %s 個起始點（start）（G = 1 有公式解）；第 s 個起始點的亂數種子（seed）為 %s + s − 1；初始化（initialisation）= %s；收斂容許誤差（tolerance，相對）= %s；最多迭代 %s 次；最小有效樣本數（effective n）= %s；共變異數條件數上限 = %s；正則化 = %s。',
++                        rc4$n_starts, rc4$seed, rc4$init, rc4$tol, rc4$max_iter, rc4$min_effective_n, rc4$max_cov_condition, cs4$settings$regularization),
++             sprintf('- 總計求解 %d 次（%s）。', sum(mc$n_starts), paste(sprintf('G=%d: %d', mc$G, mc$n_starts), collapse = ', ')), '',
++             md_table(mc[, intersect(c('G', 'n_starts', 'n_valid_starts', 'n_converged_valid', 'n_not_converged', 'n_degenerate', 'n_numeric_error', 'n_invalid_start', 'n_starts_reaching_best', 'n_distinct_optima', 'min_effective_n', 'max_cov_condition', 'diagnostic_warnings'), names(mc))]),
++             '', '*欄位說明：n_valid_starts 有效起始點數；n_converged_valid 收斂且有效；n_not_converged 未收斂；n_degenerate 退化（degenerate）；n_numeric_error 數值錯誤；n_invalid_start 起始值無效；n_starts_reaching_best 到達最佳解的起始點數；n_distinct_optima 不同的局部最佳解（local optimum）個數；diagnostic_warnings 診斷警告（代碼說明見下）。*',
++             if (any(nzchar(mc$diagnostic_warnings) & !is.na(mc$diagnostic_warnings))) { cds <- unique(sub(':.*$', '', unlist(strsplit(mc$diagnostic_warnings[!is.na(mc$diagnostic_warnings) & nzchar(mc$diagnostic_warnings)], ' | ', fixed = TRUE))))
++               c('', paste0('*診斷警告代碼：', paste(sprintf('`%s`（%s）', cds, vapply(cds, rp_zh_code, '')), collapse = '；'), '*')) } else NULL,
++             '', fig('stage4', 'loglik_histories.png'),
++             '', paste0('白話：EM 從起始點出發反覆改進參數，直到對數概似（log-likelihood）幾乎不再增加。從不同起始點出發可能停在不同的局部最佳解，所以每個 G 都試很多個起始點，保留最好的一個。',
++                        if (!is.na(nopt) && nopt > 1) sprintf('選定的 G 有 %d 個不同的局部最佳解；表中結果是對數概似最高的那一個，不同解之間的差異見第 9 節。', nopt) else '',
++                        if (fails > 0) sprintf('共有 %d 個起始點沒有得到有效解（原因見表），這些起始點不會用來選模型。', fails) else '',
++                        if (any(!mc$eligible)) sprintf('G = %s 沒有任何有效解，已排除在模型比較之外。', paste(mc$G[!mc$eligible], collapse = ', ')) else ''))
++      ref <- G0('ref'); cmp <- G0('cmp')
++      if (!is.null(ref) && !is.null(cmp)) L <- c(L, '', '**與參考 Stage 4 結果比較。**「used」是本報告採用的模型來源；「reference」是先前核准、保留但沒有被取代的結果。', '', md_table(cmp, 3))
++      # 6
++      L <- c(L, '', '## 6. 模型選擇（Stage 4D）', '', '- 貝氏資訊準則（Bayesian Information Criterion, BIC）= −2 logLik + k_G log n；赤池資訊準則（Akaike Information Criterion, AIC）= −2 logLik + 2 k_G；數值越小越好；k_G = (G−1) + Gp + Gp(p+1)/2。', '',
++             md_table(mc[, intersect(c('G', 'k_G', 'loglik', 'BIC', 'delta_BIC', 'BIC_evidence_vs_selected', 'AIC', 'delta_AIC', 'eligible'), names(mc))], 3), '',
++             '*欄位說明：loglik 對數概似；delta_BIC／delta_AIC 與最小值的差距；BIC_evidence_vs_selected 為 ΔBIC 證據強度（Kass & Raftery 分級：weak 微弱 0–2、positive 正面 2–6、strong 強 6–10、very strong 非常強 > 10、selected 選定模型）；eligible 是否有有效解。*')
++      if (!is.null(sel)) {
++        alts <- unlist(sel$alternatives_for_stage6); logn <- if ('n' %in% names(mc)) log(mc$n[1]) else NA; inel <- mc$G[!mc$eligible]
++        L <- c(L, '', sprintf('- BIC 選定 G = %d。', sel$selected_G),
++               if (isTRUE(sel$bic_aic_agree)) sprintf('- AIC 也選 G = %d，兩個準則一致。', sel$aic_selected_G)
++               else sprintf('- AIC 偏好 G = %d。AIC 對每個參數的懲罰（2）比 BIC（log n = %.2f）小，所以傾向選擇較大的 G；這不代表 G = %d 比較好，它保留給敏感度分析參考。', sel$aic_selected_G, logn, sel$aic_selected_G),
++               if (isTRUE(sel$boundary_optimum)) sprintf('- **選定的 G 剛好是搜尋上限（%s）。**更大的 G 可能更適合，但擴大搜尋範圍需要重新核准 Stage 3，系統不會自動擴大。', max(mc$G)) else NULL,
++               if (length(alts)) sprintf('- ΔBIC ≤ 6 的其他模型（G = %s）保留給 Stage 6 做敏感度分析。', paste(alts, collapse = ', ')) else '- 沒有其他模型的 ΔBIC ≤ 6。',
++               if (length(inel)) sprintf('- G = %s 沒有有效解，已排除。', paste(inel, collapse = ', ')) else NULL,
++               if (identical(as.integer(sel$selected_G), 1L)) '- 選定 G = 1 表示在這組設定下，資料用單一常態分布描述就足夠；沒有證據支持分成多個混合成分。' else NULL,
++               '', '原文（選模程式訊息）：', paste('>', sel$messages))
++        others <- mc[mc$eligible & mc$G != sel$selected_G, ]
++        if (nrow(others)) { nb <- others[which.min(others$delta_BIC), ]
++          ev <- c(`weak (0-2)` = '微弱（weak）', `positive (2-6)` = '正面（positive）', `strong (6-10)` = '強（strong）', `very strong (>10)` = '非常強（very strong）')[nb$BIC_evidence_vs_selected]
++          L <- c(L, '', sprintf('白話：次佳的 G = %d 比選定模型的 BIC 高 %s，ΔBIC 證據強度屬於%s。%s', nb$G, rp_fmt(nb$delta_BIC, 2), if (is.na(ev)) nb$BIC_evidence_vs_selected else ev,
++                                if (isTRUE(nb$delta_BIC <= 6)) '差距不大，建議一起參考第 9 節的敏感度分析。' else '')) }
++      }
++      L <- c(L, '', fig('stage4', 'bic_aic.png'))
++      tb <- G0('tb'); bg <- G0('bg')
++      if (!is.null(tb) && !is.null(bg) && !is.null(m$mclust_comparison)) L <- c(L, '', '**參考：mclust VVV（只作驗證，不用於估計或選模）。**BIC 已改成越小越好。表中 pipeline 欄位來自當時的驗證設定，不一定是本報告模型的來源。', '',
++                                                     md_table(tb, 3), '', sprintf('- mclust VVV 在 %s 設定下 BIC 最小的是 G = %s。', names(bg), bg))
++    }
++    # 7
++    L <- c(L, '', '## 7. 混合成分解釋（Stage 5）', '')
++    if (is.null(s5)) L <- c(L, '- 未執行。') else {
++      cmo <- cm5[cm5$scale == 'original', c('component', feats)]
++      L <- c(L, sprintf('- 選定模型 G = %d。參數已轉回原始單位（back-transformation：%s）。檢查：儲存的後驗機率（posterior probability）可由參數重現（最大差異 %s）；轉回原始單位後後驗機率不變（最大差異 %s）。',
++                        s5$selected_G, s5$scale$back_transform, rp_fmt(s5$checks$posterior_reproduced$max_abs_diff), rp_fmt(s5$checks$backtransform_posterior_invariance$max_abs_diff)),
++             '- 混合成分是描述資料分布的密度成分，**不是**已驗證的自然群體，因此不替成分命名。', '',
++             md_table(cs5[, c('component', 'mixing_proportion', 'effective_n', 'MAP_count', 'MAP_proportion')]),
++             '', '*欄位說明：mixing_proportion 混合比例（mixing proportion, π）；effective_n 有效樣本數（後驗機率加總）；MAP_count／MAP_proportion 依最大後驗分類（maximum a posteriori, MAP）的列數和比例。*',
++             '', '**各成分平均（原始單位）**', '', md_table(cmo), '', '**各成分內標準差（原始單位）**', '', md_table(sd5), '')
++      for (k in seq_len(nrow(s5$components))) {
++        orig <- unlist(s5$components$description[[k]]); z <- rp_zh_desc(orig)
++        L <- c(L, if (z$ok) sprintf('- 成分 %d：%s', s5$components$component[k], paste(z$text, collapse = '；'))
++                  else c(sprintf('- 成分 %d：（描述無法可靠拆解，保留 Stage 5 原文）', s5$components$component[k]), paste('  > 原文：', orig)))
++      }
++      L <- c(L, '', '*成分描述沿用 Stage 5 的結果（d = 成分平均與整體平均的差 ÷ 整體標準差；門檻見附錄 A 的 descriptor），沒有重新判斷。*',
++             '', fig('stage5', 'mean_profile_original.png'), '', fig('stage5', 'mean_profile_standardized.png'), '',
++             fig('stage5', 'correlation_heatmaps.png'), '', fig('stage5', 'pca_projection.png'),
++             '', '*主成分分析（principal component analysis, PCA）圖只是視覺化；GMM 是在所有選用變數上估計的。*',
++             '', paste0('白話：每個混合成分用它的平均、分散程度和占比描述。成分不一定代表真實存在的群體，只代表資料在這些變數上的分布可以用這幾個常態分布描述。',
++                        if (identical(as.integer(s5$selected_G), 1L)) '只有一個成分，等於用單一常態分布描述資料，沒有分群結果可以解釋。' else '',
++                        if ('SMALL_COMPONENT' %in% dw_codes) sprintf('診斷警告 SMALL_COMPONENT（%s）：有成分的有效樣本數相對於參數個數偏少，該成分的參數估計可能不穩定。', sub('^SMALL_COMPONENT: ', '', sel_dw[dw_codes == 'SMALL_COMPONENT'][1])) else ''))
++      # 8
++      L <- c(L, '', '## 8. 分類不確定性', '',
++             sprintf('- 分類不確定性（classification uncertainty）U = 1 − 最大後驗機率。平均 U = %s，中位數 %s，最大 %s（理論最大值 %s）；平均正規化熵（normalised entropy）= %s。', rp_fmt(us5$overall$mean_U), rp_fmt(us5$overall$median_U),
++                     rp_fmt(us5$overall$max_U), rp_fmt(us5$max_U_possible), rp_fmt(us5$overall$mean_entropy_normalized)),
++             sprintf('- %d 列中，U > 0.01 有 %d 列；> 0.05 有 %d 列；> 0.10 有 %d 列；> 0.25 有 %d 列。歸屬不明確的列（U > %s）只列出，不刪除也不重新分類。', us5$n, us5$overall$n_U_gt$`0.01`, us5$overall$n_U_gt$`0.05`,
++                     us5$overall$n_U_gt$`0.10`, us5$overall$n_U_gt$`0.25`, us5$threshold_ambiguous),
++             '- 後驗機率是模型推算的歸屬機率，不是經過驗證的分類正確率。', '',
++             md_table(if (is.null(amb5) || !nrow(amb5)) NULL else head(amb5[, intersect(c(names(amb5)[1], 'MAP_component', 'tau_MAP', 'second_component', 'tau_second', 'uncertainty'), names(amb5))], 15)),
++             if (!is.null(amb5) && nrow(amb5)) c('', '*欄位說明：MAP_component 最大後驗成分；tau_MAP 該成分的後驗機率；second_component／tau_second 第二可能的成分及其機率；uncertainty 即 U。*') else NULL,
++             '', fig('stage5', 'uncertainty.png'),
++             '', paste0('白話：', if (identical(as.integer(s5$selected_G), 1L)) '只有一個成分，所以不確定性都是 0，這一節沒有額外資訊。'
++                        else if (isTRUE(us5$overall$n_U_gt$`0.10` == 0)) '每一列的歸屬都很明確（最大後驗機率都至少 0.9）。'
++                        else sprintf('有 %d 列的歸屬比較不明確，可能位在兩個成分的交界。', us5$overall$n_U_gt$`0.10`)))
++    }
++    # 9
++    L <- c(L, '', '## 9. 穩定性與敏感度分析（Stage 6A–6B）', '')
++    if (is.null(s6)) L <- c(L, '- 未執行。') else {
++      bsel <- if (!is.null(b6) && nrow(b6)) b6[b6$G == s6$selected_G, ] else NULL
++      b6show <- if (!is.null(b6) && nrow(b6) > 15) b6[b6$optimum_a == 1, ] else b6
++      r6 <- if (!is.null(st6)) st6[st6$G == s6$selected_G, ] else NULL
++      evs <- unlist(s6$sensitivity$structure)
++      L <- c(L, '- 本節檢查結果的穩定性（stability）：不同起始點是否得到相同的解；以及敏感度分析（sensitivity analysis）：選定模型和其他 G 的比較。', '',
++             '### 9.1 初始化穩定性', '', md_table(st6[, intersect(c('G', 'n_valid', 'n_distinct_optima', 'n_near_best', 'share_near_best', 'loglik_gap_next_optimum', 'partition_mean_ari_near_best', 'partition_min_ari_near_best', 'partition_mean_ari_all_valid', 'partition_min_ari_all_valid'), names(st6))]),
++             '', '*欄位說明：n_near_best 到達最佳解附近的起始點數；share_near_best 其比例；loglik_gap_next_optimum 與次佳局部最佳解的對數概似差距；partition_*_ari_* 起始點之間分割的調整後蘭德指數（Adjusted Rand Index, ARI）。*',
++             '', if (!is.null(w6)) c('**同一個局部最佳解內的分割 ARI（初始化重播，replay）**', '', md_table(w6), '') else '- 起始點之間的分割 ARI：未計算（沒有經核准的初始化重播（replay））。',
++             if (!is.null(b6) && nrow(b6)) c(if (nrow(b6show) < nrow(b6)) '**最佳解與其他各局部最佳解之間的分割 ARI**（所有配對見 `stability_between_optima_ari.csv`）' else '**不同局部最佳解之間的分割 ARI**', '', md_table(b6show), '') else NULL,
++             if (!is.null(bsel) && nrow(bsel)) c(sprintf('- 選定 G = %d：不同局部最佳解的代表分割之間，ARI 平均 %s，範圍 %s 到 %s（共 %d 對）；最佳解與次佳解之間的 ARI 為 %s。', s6$selected_G,
++                                                         rp_fmt(mean(bsel$ari_representatives), 3), rp_fmt(min(bsel$ari_representatives), 3), rp_fmt(max(bsel$ari_representatives), 3), nrow(bsel),
++                                                         rp_fmt(bsel$ari_representatives[bsel$optimum_a == 1 & bsel$optimum_b == 2], 3)), '') else NULL,
++             sprintf('- 拔靴法（bootstrap）／子抽樣（subsampling）：%s。', if (grepl('^NOT RUN', s6$stability$bootstrap_subsampling)) '未執行（選用；需使用者核准重抽樣設定）' else paste('原文：', s6$stability$bootstrap_subsampling)),
++             '', '### 9.2 模型敏感度（選定模型與其他 G 比較）', '',
++             md_table(ms6[, intersect(c('G', 'role', 'loglik', 'k_G', 'BIC', 'delta_BIC', 'AIC', 'delta_AIC', 'MAP_sizes', 'mean_uncertainty', 'n_U_gt_0.10', 'n_distinct_optima', 'ARI_vs_selected', 'NMI_vs_selected'), names(ms6))], 3),
++             '', '*欄位說明：role 角色（selected 選定、alternative 比較對象）；MAP_sizes 各成分依最大後驗分類的列數；ARI_vs_selected／NMI_vs_selected 與選定模型分割的一致程度（正規化互資訊，Normalised Mutual Information, NMI）。*', '')
++      if (length(evs)) { L <- c(L, if (identical(evs, 'No split detected under the recorded thresholds.')) '- 在目前登錄的門檻下，沒有偵測到成分分裂（原文：No split detected under the recorded thresholds.）。'
++                                   else sprintf('- `%s`：%s（原文：%s）', sub(':.*$', '', evs), vapply(evs, rp_zh_code, ''), evs)) } else L <- c(L, '- 沒有比較其他 G。')
++      # agreement cases for the sensitivity table (selected row compares the model with itself)
++      if (!is.null(ms6) && nrow(ms6) > 1) {
++        szs <- lapply(strsplit(as.character(ms6$MAP_sizes), ';\\s*'), as.numeric); selsz <- szs[[which(grepl('^selected', ms6$role))[1]]]
++        for (i in which(!grepl('^selected', ms6$role))) { cs <- rp_zh_agreement_case(sum(selsz), szs[[i]], selsz)
++          if (cs != 'A') L <- c(L, sprintf('- G = %s 與選定模型的 ARI／NMI：%s', ms6$G[i], rp_zh_agree_text(cs, ms6$ARI_vs_selected[i], ms6$NMI_vs_selected[i], side = 'G 只有一個有列的成分'))) }
++      }
++      L <- c(L, '', sprintf('- 主要模型：G = %d（依 BIC）。Stage 6 沒有改變選定模型。', s6$selected_G), '', fig('stage6', 'stability_plot.png'), '', fig('stage6', 'model_sensitivity_plot.png'),
++             '', paste0('白話：', if (!is.null(r6) && nrow(r6)) sprintf('%d 個有效起始點中，有 %d 個到達最佳解；到達的比例越高，結果越不依賴起始點。', r6$n_valid, r6$n_near_best) else '',
++                        if ('SINGLE_START_OPTIMUM' %in% dw_codes) '最佳解只有一個起始點到達，結果可能依賴起始點，解讀時要保守。' else '',
++                        if ('MULTIPLE_LOCAL_OPTIMA' %in% dw_codes) '有效起始點停在多個不同的局部最佳解；目前使用對數概似最高的那一個。' else '',
++                        if (!is.null(bsel) && nrow(bsel)) sprintf('不同局部最佳解的分割可能差很多（最低 ARI %s）。', rp_fmt(min(bsel$ari_representatives), 3)) else '',
++                        if (is.null(w6)) '沒有執行初始化重播，所以無法比較各起始點實際的分割，只能比較它們的參數；這不代表各起始點的分割一致。' else ''))
++    }
++    # 10
++    L <- c(L, '', '## 10. 外部驗證（Stage 6C）', '')
++    if (is.null(ex6) || !isTRUE(ex6$available)) L <- c(L, '- **未執行（Not Performed）。**沒有提供外部標籤，因此沒有進行外部驗證（external validation）。') else {
++      cls <- cl6[cl6$role == 'selected (BIC)', ]
++      wide <- reshape(cls[, c('component', 'label', 'count')], idvar = 'component', timevar = 'label', direction = 'wide'); names(wide) <- sub('^count\\.', '', names(wide))
++      csz <- tapply(cls$count, cls$component, sum); lsz <- tapply(cls$count, cls$label, sum)
++      case <- rp_zh_agreement_case(ex6$selected$n_used, csz, lsz)
++      side <- if (sum(csz > 0) == 1L) '只有一個有列的混合成分' else '標籤只有一類'
++      ma <- ex6$selected$matched_agreement$value
++      L <- c(L, sprintf('- 外部驗證（external validation）：標籤 `%s` 以 `%s` 對齊；使用 %s 列，其中 %s 列標籤缺失。標籤只用於事後（post-hoc）比對，模型本身是非監督式。', ex6$label_column, ex6$alignment_key,
++                        rp_zh_int(ex6$selected$n_used), rp_zh_int(ex6$selected$n_label_missing)),
++             sprintf('- 選定模型：**調整後蘭德指數（Adjusted Rand Index, ARI）= %s，正規化互資訊（Normalised Mutual Information, NMI）= %s**。ARI：1 表示完全一致，約 0 表示和隨機分配差不多，也可能是負值；NMI：0 表示無關，1 表示完全一致；兩者都不受成分編號影響。', rp_zh_num(ex6$selected$ARI), rp_zh_num(ex6$selected$NMI)),
++             if (case != 'A') sprintf('- **這組數值不適合直接解讀：**%s', rp_zh_agree_text(case, ex6$selected$ARI, ex6$selected$NMI, side)) else NULL,
++             if (length(ex6$alternatives)) sprintf('- 比較對象 G = %s：ARI = %s，NMI = %s（只作敏感度參考，不用於選模）。', vapply(ex6$alternatives, `[[`, numeric(1), 'G'),
++                                                    vapply(ex6$alternatives, function(a) rp_zh_num(a$ARI), character(1)), vapply(ex6$alternatives, function(a) rp_zh_num(a$NMI), character(1))) else NULL,
++             sprintf('- 最佳一對一配對一致率（Best one-to-one matching agreement）：%s%s。計算方式：在所有「一個成分只配一個標籤」的配對方式中，選出一致筆數最多的一種，一致筆數除以使用的總筆數；沒有配對成功的成分或標籤都算不一致；成分或標籤超過 8 類時不計算。這只是事後的分類比較，標籤沒有參與 GMM 的估計；它與 ARI 不同，也不應稱為預測正確率；因為取的是所有配對中的最大值，數字偏向樂觀。',
++                     rp_zh_num(ma), if (case == 'D') '（無法計算：沒有可用的標籤列）' else if (is.null(ma) || (length(ma) == 1 && is.na(ma))) '（未計算：成分或標籤超過 8 類，原始值 NA）' else ''),
++             '', '**成分 × 標籤列聯表（選定模型）**', '', md_table(wide), '', fig('stage6', 'component_label_heatmap.png'),
++             if (case == 'A') c('', '白話：外部標籤從沒參與估計。這裡只是事後比較模型找出的成分和已知分組有多接近。不論數值高低，都不能證明混合成分就是真實群體，也不代表模型正確；數值低也不代表模型錯誤，因為成分描述的是資料分布，不一定對應這個標籤。') else NULL)
++    }
++  }
++
++  # 11
++  L <- c(L, '', '## 11. 結論與限制', '')
++  ex_case <- if (!is.null(ex6) && isTRUE(ex6$available) && !is.null(cl6)) { cls <- cl6[cl6$role == 'selected (BIC)', ]; rp_zh_agreement_case(ex6$selected$n_used, tapply(cls$count, cls$component, sum), tapply(cls$count, cls$label, sum)) } else NA
++  if (dx_only) {
++    L <- c(L, '- 依使用者選擇，分析在缺失值診斷後停止，因此不做任何分群結論。')
++  } else if (!is.null(mc) && !is.null(sel)) {
++    others <- mc[mc$eligible & mc$G != sel$selected_G, ]; nb <- if (nrow(others)) others[which.min(others$delta_BIC), ] else NULL
++    evz <- c(`weak (0-2)` = '微弱', `positive (2-6)` = '正面', `strong (6-10)` = '強', `very strong (>10)` = '非常強')
++    L <- c(L, sprintf('- BIC 選定 **G = %d**%s。AIC %s。', sel$selected_G,
++                      if (!is.null(nb)) sprintf('（次佳 G = %d，ΔBIC = %s，證據強度：%s）', nb$G, rp_fmt(nb$delta_BIC, 2), if (is.na(evz[nb$BIC_evidence_vs_selected])) nb$BIC_evidence_vs_selected else evz[nb$BIC_evidence_vs_selected]) else '',
++                      if (isTRUE(sel$bic_aic_agree)) '也選相同的 G' else sprintf('偏好 G = %d（保留給敏感度分析參考）', sel$aic_selected_G)),
++           if (isTRUE(sel$boundary_optimum)) '- 選定的 G 剛好是搜尋上限；要擴大搜尋範圍，必須重新核准 Stage 3。' else NULL,
++           if (identical(as.integer(sel$selected_G), 1L)) '- 選定 G = 1：在本分析的設定下，沒有證據支持把資料分成多個混合成分。' else NULL)
++    if (!is.null(st6)) { r <- st6[st6$G == sel$selected_G, ]
++      L <- c(L, sprintf('- 穩定性：%d 個有效起始點中有 %d 個到達最佳解%s。', r$n_valid, r$n_near_best,
++                        if (!is.na(r$partition_mean_ari_near_best)) sprintf('；這些起始點的分割一致（平均 ARI %s）；所有有效起始點的平均 ARI 為 %s', rp_fmt(r$partition_mean_ari_near_best, 3), rp_fmt(r$partition_mean_ari_all_valid, 3)) else '')) }
++    if (isTRUE(ex6$available)) L <- c(L, if (identical(ex_case, 'A')) sprintf('- 與 `%s` 的事後比對：ARI %s，NMI %s。一致不代表混合成分就是自然群體。', ex6$label_column, rp_fmt(ex6$selected$ARI, 3), rp_fmt(ex6$selected$NMI, 3))
++                                          else sprintf('- 與 `%s` 的事後比對：ARI %s，NMI %s；**這組數值不適合直接解讀**（原因見第 10 節），不能當作驗證成功或失敗。', ex6$label_column, rp_zh_num(ex6$selected$ARI, 3), rp_zh_num(ex6$selected$NMI, 3)))
++  } else L <- c(L, '- 尚未估計任何模型，結論只限於資料描述。')
++
++  # 11.1-11.5: the same registry items the English report used, rendered in Chinese (codes and original text kept)
++  auto <- wr_auto_rows(list(d2 = d2, lgp = lgp, decision = m$stage2_decision, co = co, s3 = s3, s3c = s3c, mc = mc, sel = sel, s6 = s6, b6 = b6, str6 = str6, ex6 = ex6, dx_only = dx_only))
++  recs <- list(); cands <- list(); if (!is.null(reg_dir)) { recs <- wr_load(reg_dir); cands <- wr_load_candidates(reg_dir) }
++  ap <- wr_apply(recs, rid, cands); user <- c(wr_spec_items(s3), Filter(function(r) identical(r$class, 'USER_APPROVED_LIMITATION'), ap$applied)); note <- Filter(function(r) identical(r$class, 'ANALYST_NOTE'), ap$applied)
++  scope_zh <- c(data = '資料', spec = '設定', model = '模型')
++  rec_lines <- function(r) c(sprintf('**%s** [%s] Stage %s，`%s`，範圍：%s', r$id, r$severity, r$stage, r$code, if (!is.null(r$scope) && r$scope %in% names(scope_zh)) scope_zh[[r$scope]] else as.character(r$scope)), '', wr_quote(r$text), '',
++    if (length(r$evidence)) paste0('- 證據（產生報告時從檔案讀取）：', paste(vapply(r$evidence, function(ev) paste0(ev$label, ' = ', wr_format_value(wr_read_cell(ev)), '（`', basename(dirname(ev$file)), '/', basename(ev$file), '`）'), ''), collapse = '；'), '。') else NULL,
++    sprintf('- 來源：`%s`（%s）。', basename(r$source$file), if (is.null(r$source$locator)) '整個檔案' else r$source$locator), sprintf('- 核准（原文）：%s', r$approved$ref), '')
++  L <- c(L, '', '### 11.1 自動診斷', '', '*由本分析的各階段輸出檔自動產生；代碼與原文保留，中文為說明。*', '',
++         if (is.null(auto)) '- 無。' else sprintf('- [%s] Stage %s，`%s`：%s（原文：%s）', auto$severity, auto$stage, auto$code, vapply(auto$code, rp_zh_code, ''), auto$text),
++         '', '### 11.2 使用者核准的限制', '', '*以下逐字引用已核准的設定或已確認的登錄紀錄（保留原文，不翻譯）。*', '',
++         if (length(user)) unlist(lapply(user, rec_lines)) else c('- 無。', ''),
++         '### 11.3 分析者註記', '', '*經使用者確認的解讀，不是已確立的統計結果；註記內容保留原文。*', '',
++         if (length(note)) unlist(lapply(note, rec_lines)) else c('- 無。', ''),
++         '### 11.4 未引用的紀錄', '', '*屬於其他模型、已被取代或尚待確認的紀錄；內容刻意不在此重現。*', '',
++         if (is.null(ap$refused)) '- 無。' else sprintf('- `%s`（%s）：%s。', ap$refused$id, ap$refused$class, ap$refused$reason), '')
++  if (length(m$additional_limitations)) L <- c(L, '### 報告設定檔中的限制（未經登錄驗證）', '', '*來自報告設定檔的自由文字，沒有記錄來源、核准或對應的分析身分；內容保留原文。*', '', paste('-', unlist(m$additional_limitations)), '')
++  L <- c(L, '### 11.5 一般方法限制', '', '- 高斯混合成分是密度成分；後驗機率不是經過驗證的分類正確率。',
++         sprintf('- 本分析流程使用的 %d 個經驗門檻（heuristic threshold）是本專案自訂、尚待審核的設定（見附錄 A）。', nrow(gmm_heuristics_registry())))
++
++  # 12
++  L <- c(L, '', '## 12. 可重現性資訊', '', md_table(rtab), '',
++         sprintf('- Stage 3 設定雜湊（spec hash）`%s`；核准編號 `%s`。', if (is.null(s3)) '-' else s3$spec_hash, if (is.null(s3)) '-' else s3$approval_id),
++         sprintf('- 初始化重播資料夾：%s。', if (is.null(dirs$stage6_replay)) '無' else sprintf('`%s`', dirs$stage6_replay)),
++         sprintf('- 警告登錄：%s（引用 %d 筆；未引用 %d 筆）。完整清單：`warnings_registry_snapshot.csv`。', if (is.null(reg_dir)) '無' else sprintf('`%s`', reg_dir), reg$n_applied, reg$n_refused),
++         if (length(m$approval_records)) c('- 核准紀錄：', paste0('  - `', unlist(m$approval_records), '`')) else NULL,
++         if (length(m$config_files)) c('- 設定檔：', paste0('  - `', unlist(m$config_files), '`')) else NULL,
++         '- 產生報告時的 Skill 程式檢查碼（MD5）：', paste0('  - `', basename(sc), '` ', unname(tools::md5sum(sc))),
++         '- 回歸測試：`Rscript .claude/skills/multivariate-gmm/tests/run_all_tests.R`（開發版才有；發佈版不含 tests）。', '- 本報告讀取的所有來源檔及其檢查碼：`report_manifest.json`。',
++         '- 報告語言：zh-TW（只影響報告文字，不影響任何分析結果、spec hash 或模型 ID）。')
++
++  # Appendix A: the registry table unchanged, then the Chinese notes keyed by name
++  hzz <- do.call(rbind, lapply(seq_len(nrow(hz)), function(i) { z <- RP_ZH_HEUR[[hz$name[i]]]; if (is.null(z)) stop('Missing Chinese note for threshold ', hz$name[i], call. = FALSE)
++    data.frame(`#` = i, name = hz$name[i], 中文名稱 = z[1], 程式實際規則 = z[2], 類型 = if (is.na(RP_ZH_HEUR_TYPE[sub(' \\(.*$', '', hz$type[i])])) hz$type[i] else unname(RP_ZH_HEUR_TYPE[sub(' \\(.*$', '', hz$type[i])]), check.names = FALSE, stringsAsFactors = FALSE) }))
++  L <- c(L, '', '## 附錄 A. 待審核的經驗門檻', '', '以下是本專案自訂的篩檢門檻，不是教科書規則；確認之前一律維持「待審核」狀態。第一張表是程式登錄的原文（與 `pending_heuristics.csv` 相同），第二張表是中文說明與程式實際使用的規則。觸發門檻不代表模型一定錯誤，也不代表統計假設已被證明違反。', '',
++         md_table(hz[, c('stage', 'name', 'value', 'type', 'use', 'location')]), '', '**中文說明（登錄值不變）**', '', md_table(hzz),
++         '', '*⚠ `sd_ratio_scale`：登錄值 10 未被程式讀取，S3-06 實際使用「選原始單位且標準差比值 > 100」。這是已知的規格與實作不一致，rc4 不修改，待另行核准修正。*')
++  m_ds <- m$data_source
++  if (!is.null(m_ds) && file.exists(resolve_path(m_ds))) L <- c(L, '', '## 附錄 B. 資料來源紀錄', '', paste('>', readLines(resolve_path(m_ds), warn = FALSE, encoding = 'UTF-8')))
++  enc2utf8(unlist(L))
++}
+

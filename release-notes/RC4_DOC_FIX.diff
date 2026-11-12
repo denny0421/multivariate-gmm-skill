@@ -1,0 +1,44 @@
+Unified diff rc4 -> rc4 doc fix (release/github-classroom/skill). Text-only changes; R scripts unchanged.
+
+--- a/references/decision-tree.md (rc4)
++++ b/references/decision-tree.md (rc4 doc fix)
+@@ -143,4 +143,4 @@
+ 
+ ## Source boundary
+ 
++This Skill uses Hair Chapter 4 (8th ed., pp. 199–229) as a reference framework and extends it for GMM; the stages are adapted, not identical to Hair's. Hair Chapter 4 supports the *six stages*, research objective/variable choices, standardization and outlier awareness, representativeness and multicollinearity, model-based clustering and interpretation/validation. Normality: Hair (p. 211) states that normality has little bearing on cluster analysis in general (distance-based methods); a GMM, by contrast, assumes multivariate normal *components*, so the Gaussian working-model checks in Stage 3 are GMM-specific design choices, not Hair's rules. Numerical GMM feasibility formulas, implementation approvals, missing-data scope, execution safeguards and R/Claude Code orchestration are **additional Skill design choices**.
+-Hair Chapter 4 supports the *six stages*, research objective/variable choices, standardization and outlier awareness, representativeness and multicollinearity, model-based clustering and interpretation/validation. Numerical GMM feasibility formulas, implementation approvals, missing-data scope, execution safeguards and R/Claude Code orchestration are **additional Skill design choices**.
+
+--- a/references/stage4-em-math.md (rc4)
++++ b/references/stage4-em-math.md (rc4 doc fix)
+@@ -44,7 +44,7 @@
+ - μ_i = (1/N_i) Σ_j τ_ji x_j
+ - Σ_i = (1/N_i) Σ_j τ_ji (x_j − μ_i)(x_j − μ_i)ᵀ, using the **updated** μ_i and divisor **N_i** (MLE; not N_i − 1). In code: `crossprod(sqrt(tau_i) * (X − μ_i)) / N_i`, then symmetrised as (Σ + Σᵀ)/2 to remove rounding asymmetry.
+ 
++**Check of the derivation.** ∂Q/∂μ_i = Σ_j τ_ji Σ_i⁻¹(x_j − μ_i) = 0 gives the weighted mean. ∂Q/∂Σ_i⁻¹ = (1/2) Σ_j τ_ji [Σ_i − (x_j−μ_i)(x_j−μ_i)ᵀ] = 0 gives the weighted scatter / N_i. These agree with Stage 4 spec §4B. (Hair et al. Chapter 4, pp. 226–227, only names EM as the estimation method for model-based clustering and gives no M-step formulas, so it is not a source for this check.) **Result: formulas verified; no discrepancy.**
+-**Check of the derivation.** ∂Q/∂μ_i = Σ_j τ_ji Σ_i⁻¹(x_j − μ_i) = 0 gives the weighted mean. ∂Q/∂Σ_i⁻¹ = (1/2) Σ_j τ_ji [Σ_i − (x_j−μ_i)(x_j−μ_i)ᵀ] = 0 gives the weighted scatter / N_i. These agree with Hair et al. Chapter 4 (model-based clustering via EM) and with Stage 4 spec §4B. **Result: formulas verified; no discrepancy.**
+ 
+ **G = 1.** The MLE is closed-form: μ = x̄ and Σ = (1/n) Σ_j (x_j − x̄)(x_j − x̄)ᵀ, with τ ≡ 1. It is computed directly as one "converged" step.
+ 
+
+--- a/references/stage5-interpretation.md (rc4)
++++ b/references/stage5-interpretation.md (rc4 doc fix)
+@@ -5,7 +5,7 @@
+ > - Not implemented: Stage 6 items (external labels, stability).
+ > - New heuristic thresholds are listed in `decision-tree-alignment.md` B12. The text below remains the governing specification.
+ 
++**Status:** design specification, not a fitted model. Hair et al., *Multivariate Data Analysis*, 8th ed., Chapter 4 pp. 227–228 motivates interpreting the cluster profiles on original variable scales and examining meaningful descriptive differences. Hair also describes assigning descriptive labels to clusters from their profiles; this Skill deliberately does **not** name components. That is the Skill's own conservative interpretation rule (a Gaussian component is not necessarily a real group), not a recommendation from Hair. The Gaussian-mixture probability measures and safeguards below are additional model-specific specifications.
+-**Status:** design specification, not a fitted model. Hair et al., *Multivariate Data Analysis*, 8th ed., Chapter 4 pp. 227–228 motivates interpreting the cluster profiles on original variable scales, examining meaningful descriptive differences and avoiding arbitrary naming. The Gaussian-mixture probability measures and safeguards below are additional model-specific specifications.
+ 
+ ## Inputs and preflight
+ 
+
+--- a/SKILL.md (rc4)
++++ b/SKILL.md (rc4 doc fix)
+@@ -467,4 +467,4 @@
+ - `references/missing-data-menu.md`: missing-data choice policy and caveats.
+ - `references/stage-contract.md`: workflow states and approval handoff; the estimation contracts are pending.
+ - `references/stage4-model-fitting.md`, `references/stage5-interpretation.md`, `references/stage6-validation.md`: planned methods; not callable implementations.
++- Source: Hair et al., *Multivariate Data Analysis*, 8th ed., Chapter 4, six-stage clustering decision framework, used as a reference framework and extended for GMM (not identical to Hair). Missing-data handling specifics and EDA screening thresholds are project design choices, not textbook prescriptions.
+-- Source: Hair et al., *Multivariate Data Analysis*, 8th ed., Chapter 4, six-stage clustering decision framework. Missing-data handling specifics and EDA screening thresholds are project design choices, not textbook prescriptions.
+

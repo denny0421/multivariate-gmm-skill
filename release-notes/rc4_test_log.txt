@@ -1,0 +1,111 @@
+== A Penguins manifest
+PASS [A] rc3 en, rc4 en and rc4 zh all exit 0
+PASS [A] T-2 English report identical to rc3 except generated time and script checksum list
+PASS [A] manifest: en adds only report_language = "en"; zh records "zh-TW"
+PASS [A] T-3 en and zh read exactly the same source files (md5 and sha256)
+PASS [A] other output files identical between en and zh (pending_heuristics.csv, warnings_registry_snapshot.csv, figures)
+PASS [A] zh: valid UTF-8, no unfilled placeholders
+PASS [A] zh has the same numbered sections as en (12 of 12) and Appendix A + B
+PASS [A] every en table (19) appears verbatim in zh
+PASS [A] every number in the en text appears in zh (102 numbers)
+PASS [A] every code in en appears in zh (37 codes)
+PASS [A] all 12 automated-diagnostic original texts quoted unchanged in zh
+PASS [A] same 15 figures referenced in en and zh, each with a Chinese caption
+== B Automobile manifest (KNN, no labels, notes, model source, limitations, mclust, reference)
+PASS [B] rc3 en, rc4 en and rc4 zh all exit 0
+PASS [B] T-2 English report identical to rc3 except generated time and script checksum list
+PASS [B] manifest: en adds only report_language = "en"; zh records "zh-TW"
+PASS [B] T-3 en and zh read exactly the same source files (md5 and sha256)
+PASS [B] other output files identical between en and zh (pending_heuristics.csv, warnings_registry_snapshot.csv, figures)
+PASS [B] zh: valid UTF-8, no unfilled placeholders
+PASS [B] zh has the same numbered sections as en (12 of 12) and Appendix A + B
+PASS [B] every en table (20) appears verbatim in zh
+PASS [B] every number in the en text appears in zh (128 numbers)
+PASS [B] every code in en appears in zh (42 codes)
+PASS [B] all 11 automated-diagnostic original texts quoted unchanged in zh
+PASS [B] same 14 figures referenced in en and zh, each with a Chinese caption
+PASS [A] T-9 Appendix A: the 41-row registry table is unchanged and the Chinese table has 41 rows; sd_ratio_scale flagged
+== C Penguins workflow (rc4), compare G = 4
+PASS [C] stage steps: import=0 IMPORTED; new-run=0 CREATED; stage2=2 MISSING_DATA_CHOICE; stage2-handle=0 PROCESSED_AWAITING_GMM_APPROVAL; stage3=0 APPROVED_FOR_FIT; stage4=0 PASS; stage5=0 DONE; stage6=0 DONE
+PASS [C] rc4 report en, rc4 report zh-TW, rc3 report all exit 0; three new report folders
+PASS [C] T-4 report language changes no analysis file, spec, model id or active model (state recorded languages: en, zh-TW)
+PASS [C] T-2 English report identical to rc3 (same root) except time and script checksums
+PASS [C] T-3 en and zh read the same sources
+PASS [C] zh: valid UTF-8, no unfilled placeholders
+PASS [C] zh has the same numbered sections as en (12 of 12) and Appendix A
+PASS [C] every en table (17) appears verbatim in zh
+PASS [C] every number in the en text appears in zh (79 numbers)
+PASS [C] every code in en appears in zh (35 codes)
+PASS [C] all 9 automated-diagnostic original texts quoted unchanged in zh
+PASS [C] same 15 figures referenced in en and zh, each with a Chinese caption
+PASS [C] zh shows agreement case A (no "不適合直接解讀"), ARI line present
+== D diagnostics-only
+PASS [D] stage steps: import=0 IMPORTED; new-run=0 CREATED; stage2=2 MISSING_DATA_CHOICE; stage2-handle=0 DIAGNOSTICS_ONLY_CHOSEN
+PASS [D] rc4 report en, rc4 report zh-TW, rc3 report all exit 0; three new report folders
+PASS [D] T-4 report language changes no analysis file, spec, model id or active model (state recorded languages: en, zh-TW)
+PASS [D] T-2 English report identical to rc3 (same root) except time and script checksums
+PASS [D] T-3 en and zh read the same sources
+PASS [D] zh: valid UTF-8, no unfilled placeholders
+PASS [D] zh has the same numbered sections as en (5 of 12) and Appendix A
+PASS [D] every en table (6) appears verbatim in zh
+PASS [D] every number in the en text appears in zh (12 numbers)
+PASS [D] every code in en appears in zh (15 codes)
+PASS [D] all 1 automated-diagnostic original texts quoted unchanged in zh
+PASS [D] same 5 figures referenced in en and zh, each with a Chinese caption
+PASS [D] zh: diagnostics-only stated, sections 4-10 omitted, no clustering conclusion
+== E single Gaussian (expected G = 1), two-class label -> case B
+PASS [E] stage steps: import=0 IMPORTED; new-run=0 CREATED; stage2=0 DIAGNOSTICS_ONLY; stage3=0 APPROVED_FOR_FIT; stage4=0 PASS; stage5=0 DONE; stage6=0 DONE
+PASS [E] rc4 report en, rc4 report zh-TW, rc3 report all exit 0; three new report folders
+PASS [E] T-4 report language changes no analysis file, spec, model id or active model (state recorded languages: en, zh-TW)
+PASS [E] T-2 English report identical to rc3 (same root) except time and script checksums
+PASS [E] T-3 en and zh read the same sources
+PASS [E] zh: valid UTF-8, no unfilled placeholders
+PASS [E] zh has the same numbered sections as en (12 of 12) and Appendix A
+PASS [E] every en table (16) appears verbatim in zh
+PASS [E] every number in the en text appears in zh (34 numbers)
+PASS [E] every code in en appears in zh (33 codes)
+PASS [E] all 3 automated-diagnostic original texts quoted unchanged in zh
+PASS [E] same 15 figures referenced in en and zh, each with a Chinese caption
+PASS [E] BIC selected G = 1; zh states no evidence for several components
+PASS [E] case B text: one side has one class, values by formula, not "完全不一致"
+== F single Gaussian, one-class label -> case C
+PASS [F] stage steps: import=0 IMPORTED; new-run=0 CREATED; stage2=0 DIAGNOSTICS_ONLY; stage3=0 APPROVED_FOR_FIT; stage4=0 PASS; stage5=0 DONE; stage6=0 DONE
+PASS [F] rc4 report en, rc4 report zh-TW, rc3 report all exit 0; three new report folders
+PASS [F] T-4 report language changes no analysis file, spec, model id or active model (state recorded languages: en, zh-TW)
+PASS [F] T-2 English report identical to rc3 (same root) except time and script checksums
+PASS [F] T-3 en and zh read the same sources
+PASS [F] zh: valid UTF-8, no unfilled placeholders
+PASS [F] zh has the same numbered sections as en (12 of 12) and Appendix A
+PASS [F] every en table (16) appears verbatim in zh
+PASS [F] every number in the en text appears in zh (33 numbers)
+PASS [F] every code in en appears in zh (33 codes)
+PASS [F] all 3 automated-diagnostic original texts quoted unchanged in zh
+PASS [F] same 15 figures referenced in en and zh, each with a Chinese caption
+PASS [F] case C text: both one class, special rule, not validation success
+== G label column entirely missing -> case D (if Stage 6 runs)
+INFO [G] workflow outcome: import=0 IMPORTED; new-run=0 CREATED; stage2=0 DIAGNOSTICS_ONLY; stage3=0 APPROVED_FOR_FIT; stage4=0 PASS; stage5=0 DONE; stage6=1 EXECUTION_ERROR (case D covered by the unit test below)
+== H forced non-convergence (module select_stage4.R, max-iter 3) on the C analysis matrix
+PASS [H] select_stage4 exit 0; not converged starts: 40; all reports exit 0
+PASS [H] T-2 en identical to rc3
+PASS [H] zh: valid UTF-8, no unfilled placeholders
+PASS [H] zh has the same numbered sections as en (11 of 12) and Appendix A
+PASS [H] every en table (10) appears verbatim in zh
+PASS [H] every number in the en text appears in zh (22 numbers)
+PASS [H] every code in en appears in zh (32 codes)
+PASS [H] all 5 automated-diagnostic original texts quoted unchanged in zh
+PASS [H] same 7 figures referenced in en and zh, each with a Chinese caption
+PASS [H] zh reports the failed starts and says they are not used; Stage 5-6 shown as not performed
+== U unit tests (report_text.R)
+PASS U1 agreement cases from counts: A=A B1=B B2=B C=C S=S D=D D2=D
+PASS U1 case D keeps raw values (NaN shown as NaN, not replaced): 沒有可用的標籤列（n_used = 0），指標無法計算；程式輸出的值（ARI NaN、NMI 1.0000）沒有意義，不
+PASS U1 rp_zh_num shows NA and NaN verbatim
+PASS U2 boundary d = ±0.5 / ±0.4999 / ±0.5001 parsed: 高於整體平均：a（+0.50 SD；平均 11）、d_e（+0.50 SD；平均 11） | 低於整體平均：f-g（-0.50 SD；平均 9）、k（-0.50 SD；平均 9） | 接近整體平均（|d| < 0.5 SD）：b.c、h1
+PASS U2 every variable lands in the same category as the Stage 5 sentence
+PASS U2 only one category
+PASS U2 sentences that do not match the Stage 5 format exactly are not translated (fallback to original)
+PASS U2 an unusual but exactly reconstructable name is parsed by exact round trip
+PASS U3 T-8 code dictionary: 134 codes emitted by the scripts, 0 without a Chinese explanation
+PASS U4 Appendix A: 41 registry names, all have Chinese notes
+PASS U5 bad language refused by report_final and workflow
+
+rc4 tests T-2..T-9: 99 passed, 0 failed. Temp folder: <local scratch folder, removed for publication>

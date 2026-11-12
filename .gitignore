@@ -1,0 +1,28 @@
+# Analysis outputs created when the Skill runs in a clone of this repo
+results/
+**/results/
+*.rds
+workflow_state.json
+
+# R and Quarto
+.Rhistory
+.RData
+.Rproj.user/
+.quarto/
+*_files/
+*_cache/
+
+# Scratch and system files
+tmp/
+scratch/
+*.tmp
+*.log
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Local settings and secrets
+.env
+.env.*
+.Renviron
+.claude/settings.local.json

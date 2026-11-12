@@ -1,0 +1,28 @@
+.src-box { border-left: 5px solid #777; background: #f6f6f4; padding: .55rem .8rem; margin: .8rem 0 1.1rem; font-size: .88rem; line-height: 1.5; }
+.src-box code { font-size: .82rem; white-space: normal; overflow-wrap: anywhere; word-break: break-all; background: transparent; color: inherit; }
+.tier-tag { display: inline-block; font-weight: 700; font-size: .78rem; padding: .05rem .5rem; border-radius: 3px; color: #fff; background: #777; margin-bottom: .25rem; }
+.tier-approved { border-color: #2c7a4b; } .tier-approved .tier-tag { background: #2c7a4b; }
+.tier-working { border-color: #2f5d85; } .tier-working .tier-tag { background: #2f5d85; }
+.tier-diagnostic { border-color: #6b6b6b; } .tier-diagnostic .tier-tag { background: #6b6b6b; }
+.tier-validation { border-color: #7a5aa6; } .tier-validation .tier-tag { background: #7a5aa6; }
+.tier-scratch { border-color: #c0562f; background: #fdf3ee; } .tier-scratch .tier-tag { background: #c0562f; }
+.tier-demo { border-color: #a07a12; background: #fdf9ec; } .tier-demo .tier-tag { background: #a07a12; }
+.tier-teaching { border-color: #4a8fa3; } .tier-teaching .tier-tag { background: #4a8fa3; }
+.part-title { font-size: 1.05rem; color: #666; letter-spacing: .04em; }
+table { font-size: .88rem; }
+.cell-output-display table { display: table; }
+.table-wrap, .cell-output-display { overflow-x: auto; }
+figure img, p > img { max-width: 100%; height: auto; }
+pre { white-space: pre-wrap; word-break: break-word; }
+.mermaid, .cell-output-display svg { max-width: 100%; }
+span.math.display, math[display="block"] { display: block; max-width: 100%; overflow-x: auto; overflow-y: hidden; }
+math { font-family: "Cambria Math", "STIX Two Math", "Latin Modern Math", serif; font-size: 1.08em; }
+div.sourceCode, pre.sourceCode { max-width: 100%; overflow-x: auto; }
+pre code { white-space: pre-wrap; word-break: break-word; }
+@media (max-width: 768px) {
+  main table { display: block; max-width: 100%; overflow-x: auto; }
+  main code { overflow-wrap: anywhere; white-space: normal; }
+  pre code { white-space: pre-wrap; }
+  .quarto-figure, figure { max-width: 100%; }
+  #refs a, .csl-entry { overflow-wrap: anywhere; word-break: break-word; }
+}
