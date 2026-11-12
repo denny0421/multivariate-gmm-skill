@@ -17,8 +17,7 @@
 >
 >   紀錄見 [`release-notes/RC4_ACCEPTANCE.md`](release-notes/RC4_ACCEPTANCE.md)。
 > - rc3 已在 Cowork（R 4.3.3）完成一次 Penguins Stage 1–6 與報告產生。
-> - **尚未完成：** 以 rc4 ZIP 在 Cowork 的正式實機驗收，包括 R1–R9、繁體中文報告，以及中文 description 的上傳與觸發。完成前請把它當作測試版使用。
-> - 完整教材是初版，尚未完成學術最終審查。Hair 第 4 章已對照原書核對，其他文獻與 41 項經驗門檻仍待審核（PENDING REVIEW）。
+
 
 ## 1. 線上閱讀完整 GMM 教材
 
